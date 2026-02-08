@@ -22,10 +22,9 @@ app.post("/api/download", (req, res) => {
         });
     }
 
-    // ⭐ حل مشكلة YouTube (video + audio)
-    const cmd = `yt-dlp -j --no-warnings -f "bv*+ba/best" "${url}"`;
+    const cmd = yt-dlp -j --no-warnings --cookies cookies.txt "${url}";
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout) => {
         if (error) {
             console.error(error);
             return res.status(500).json({
@@ -40,30 +39,29 @@ app.post("/api/download", (req, res) => {
             const formats = (info.formats || [])
                 .filter(f => f.url && f.vcodec !== "none")
                 .map(f => ({
-                    quality: f.format_note || (f.height ? `${f.height}p` : "unknown"),
-                    ext: f.ext,
-                    url: f.url
+                    quality: f.format_note || ${f.height}p,
+                    url: f.url,
+                    ext: f.ext
                 }));
 
             res.json({
                 success: true,
-                platform: info.extractor_key,
                 title: info.title,
+                platform: info.extractor_key,
                 thumbnail: info.thumbnail,
-                duration: info.duration,
                 formats,
-                best: formats.length ? formats[0].url : null
+                best: info.url
             });
 
         } catch (e) {
             res.status(500).json({
                 success: false,
-                error: "Parsing yt-dlp output failed"
+                error: "Parsing error"
             });
         }
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(🚀 Server running on port ${PORT});
 });
