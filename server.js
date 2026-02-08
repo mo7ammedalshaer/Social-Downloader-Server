@@ -22,9 +22,10 @@ app.post("/api/download", (req, res) => {
         });
     }
 
-    const cmd = `yt-dlp -j --no-warnings --cookies cookies.txt "${url}"`;
+    // ⭐ حل مشكلة YouTube (video + audio)
+    const cmd = `yt-dlp -j --no-warnings -f "bv*+ba/best" "${url}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout) => {
         if (error) {
             console.error(error);
             return res.status(500).json({
@@ -39,24 +40,25 @@ app.post("/api/download", (req, res) => {
             const formats = (info.formats || [])
                 .filter(f => f.url && f.vcodec !== "none")
                 .map(f => ({
-                    quality: f.format_note || `${f.height}p`,
-                    url: f.url,
-                    ext: f.ext
+                    quality: f.format_note || (f.height ? `${f.height}p` : "unknown"),
+                    ext: f.ext,
+                    url: f.url
                 }));
 
             res.json({
                 success: true,
-                title: info.title,
                 platform: info.extractor_key,
+                title: info.title,
                 thumbnail: info.thumbnail,
+                duration: info.duration,
                 formats,
-                best: info.url
+                best: formats.length ? formats[0].url : null
             });
 
         } catch (e) {
             res.status(500).json({
                 success: false,
-                error: "Parsing error"
+                error: "Parsing yt-dlp output failed"
             });
         }
     });
