@@ -12,7 +12,10 @@ app.get("/", (req, res) => {
     res.send("Social Downloader API is Online 🚀");
 });
 
-app.post("/api/download", (req, res) => {
+// ===============================
+// DOWNLOAD API (yt-dlp)
+// ===============================
+app.post("/api/download", async (req, res) => {
     const { url } = req.body;
 
     if (!url) {
@@ -22,14 +25,16 @@ app.post("/api/download", (req, res) => {
         });
     }
 
-    const cmd = yt-dlp -j --no-warnings --cookies cookies.txt "${url}";
+    const cmd = `
+        yt-dlp -j --no-warnings --cookies cookies.txt "${url}"
+    `;
 
     exec(cmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout) => {
         if (error) {
             console.error(error);
             return res.status(500).json({
                 success: false,
-                error: error.message
+                error: "Download failed"
             });
         }
 
@@ -39,7 +44,7 @@ app.post("/api/download", (req, res) => {
             const formats = (info.formats || [])
                 .filter(f => f.url && f.vcodec !== "none")
                 .map(f => ({
-                    quality: f.format_note || ${f.height}p,
+                    quality: f.format_note || `${f.height}p`,
                     url: f.url,
                     ext: f.ext
                 }));
@@ -63,5 +68,5 @@ app.post("/api/download", (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(🚀 Server running on port ${PORT});
+    console.log(`🚀 Server running on port ${PORT}`);
 });
