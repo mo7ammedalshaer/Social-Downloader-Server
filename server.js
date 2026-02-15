@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { exec } = require("child_process");
+const { exec, spawn } = require("child_process");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,7 +20,7 @@ const isYouTube = (url) => {
 };
 
 // ===============================
-// DOWNLOAD API (yt-dlp)
+// DOWNLOAD API (yt-dlp JSON)
 // ===============================
 app.post("/api/download", async (req, res) => {
     const { url } = req.body;
@@ -32,9 +32,7 @@ app.post("/api/download", async (req, res) => {
         });
     }
 
-    const cmd = `
-        yt-dlp -j --no-warnings --cookies cookies.txt "${url}"
-    `;
+    const cmd = `yt-dlp -j --no-warnings --cookies cookies.txt "${url}"`;
 
     exec(cmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout) => {
         if (error) {
@@ -56,12 +54,11 @@ app.post("/api/download", async (req, res) => {
                     ext: f.ext
                 }));
 
-            // ✅ تحسين خاص لليوتيوب (بدون تغيير JSON structure)
             if (isYouTube(url)) {
                 formats = formats.sort((a, b) => {
                     const qa = parseInt(a.quality) || 0;
                     const qb = parseInt(b.quality) || 0;
-                    return qb - qa; // أعلى جودة أولاً
+                    return qb - qa;
                 });
             }
 
@@ -79,6 +76,53 @@ app.post("/api/download", async (req, res) => {
                 success: false,
                 error: "Parsing error"
             });
+        }
+    });
+});
+
+// ===============================
+// DIRECT DOWNLOAD (Safe Streaming)
+// ===============================
+app.get("/api/direct", (req, res) => {
+    const { url } = req.query;
+
+    if (!url) {
+        return res.status(400).json({
+            success: false,
+            error: "URL is required"
+        });
+    }
+
+    const fileName = `video_${Date.now()}.mp4`;
+
+    const ytProcess = spawn("yt-dlp", [
+        "-f", "best",
+        "-o", "-",
+        url
+    ]);
+
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Type", "video/mp4");
+
+    ytProcess.stdout.pipe(res);
+
+    ytProcess.stderr.on("data", (data) => {
+        console.error("yt-dlp error:", data.toString());
+    });
+
+    ytProcess.on("error", (err) => {
+        console.error("Spawn error:", err);
+        if (!res.headersSent) {
+            res.status(500).json({
+                success: false,
+                error: "Download failed"
+            });
+        }
+    });
+
+    ytProcess.on("close", (code) => {
+        if (code !== 0) {
+            console.error("yt-dlp exited with code", code);
         }
     });
 });
