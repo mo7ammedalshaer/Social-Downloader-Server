@@ -9,19 +9,12 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/", (req, res) => {
-    res.send("🔥 Social Downloader API is Online 🚀");
+    res.send("Social Downloader API is Online 🚀");
 });
 
-// ============================================
-// DOWNLOAD API (Universal via yt-dlp)
-// Supports:
-// - YouTube (Video + Shorts)
-// - Twitter/X
-// - Instagram (Video + Photo + Reels + Stories public)
-// - Facebook (Video + Stories public)
-// - Snapchat Spotlight
-// ============================================
-
+// ===============================
+// DOWNLOAD API (yt-dlp)
+// ===============================
 app.post("/api/download", async (req, res) => {
     const { url } = req.body;
 
@@ -33,56 +26,39 @@ app.post("/api/download", async (req, res) => {
     }
 
     const cmd = `
-        yt-dlp -J --no-warnings --no-playlist --cookies cookies.txt "${url}"
+        yt-dlp -j --no-warnings --cookies cookies.txt "${url}"
     `;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout) => {
         if (error) {
-            console.error(stderr);
+            console.error(error);
             return res.status(500).json({
                 success: false,
-                error: "Download failed",
-                details: stderr
+                error: "Download failed"
             });
         }
 
         try {
             const info = JSON.parse(stdout);
 
-            // If playlist (Instagram multi images etc)
-            const entries = info.entries || [info];
-
-            const results = entries.map(video => {
-
-                const formats = (video.formats || [])
-                    .filter(f => f.url)
-                    .map(f => ({
-                        quality: f.format_note || `${f.height || ""}p`,
-                        ext: f.ext,
-                        type: f.vcodec === "none" ? "audio" : "video",
-                        url: f.url
-                    }));
-
-                return {
-                    title: video.title,
-                    platform: video.extractor_key,
-                    thumbnail: video.thumbnail,
-                    duration: video.duration,
-                    uploader: video.uploader,
-                    webpage_url: video.webpage_url,
-                    best_video: video.url,
-                    formats
-                };
-            });
+            const formats = (info.formats || [])
+                .filter(f => f.url && f.vcodec !== "none")
+                .map(f => ({
+                    quality: f.format_note || `${f.height}p`,
+                    url: f.url,
+                    ext: f.ext
+                }));
 
             res.json({
                 success: true,
-                count: results.length,
-                data: results
+                title: info.title,
+                platform: info.extractor_key,
+                thumbnail: info.thumbnail,
+                formats,
+                best: info.url
             });
 
         } catch (e) {
-            console.error(e);
             res.status(500).json({
                 success: false,
                 error: "Parsing error"
@@ -92,8 +68,5 @@ app.post("/api/download", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log("=================================");
-    console.log("🚀 Social Downloader API Running");
-    console.log(`🌍 Port: ${PORT}`);
-    console.log("=================================");
+    console.log(`🚀 Server running on port ${PORT}`);
 });
