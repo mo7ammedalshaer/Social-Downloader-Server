@@ -1,8 +1,10 @@
 const express = require("express");
 const cors = require("cors");
 const { exec, spawn } = require("child_process");
-const axios = require("axios");
-const cheerio = require("cheerio");
+const util = require("util");
+const execPromise = util.promisify(exec);
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,171 +13,218 @@ app.use(cors());
 app.use(express.json());
 
 // ===============================
-// Helpers
+// Helper: Detect Platform
 // ===============================
 const getPlatformFromUrl = (url) => {
     const patterns = {
+        youtube: /youtube\.com|youtu\.be/i,
         tiktok: /tiktok\.com|vm\.tiktok\.com/i,
-        youtube: /youtube\.com|youtu\.be/i
+        instagram: /instagram\.com/i,
+        twitter: /twitter\.com|x\.com/i,
+        facebook: /facebook\.com|fb\.watch/i
     };
+
     for (const [platform, pattern] of Object.entries(patterns)) {
         if (pattern.test(url)) return platform;
     }
-    return null;
-};
-
-const getRandomUserAgent = () => {
-    const userAgents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-    ];
-    return userAgents[Math.floor(Math.random() * userAgents.length)];
+    return "unknown";
 };
 
 // ===============================
-// TikTok Downloader
+// Helper: Check if yt-dlp exists
 // ===============================
-const downloadTikTok = async (url) => {
+const checkYtDlp = async () => {
     try {
-        const response = await axios.get('https://api.tikmate.app/api/lookup', {
-            params: { url },
-            headers: {
-                'User-Agent': getRandomUserAgent(),
-                'Referer': 'https://tikmate.app/'
-            },
-            timeout: 30000
-        });
-
-        if (response.data?.success) {
-            const data = response.data;
-            const formats = [{
-                quality: 'HD (No Watermark)',
-                url: data.video_url_no_watermark || data.video_url,
-                ext: 'mp4'
-            }];
-            
-            if (data.video_url && data.video_url !== data.video_url_no_watermark) {
-                formats.push({
-                    quality: 'HD (With Watermark)',
-                    url: data.video_url,
-                    ext: 'mp4'
-                });
-            }
-
-            return {
-                success: true,
-                title: data.title || 'TikTok Video',
-                platform: 'TikTok',
-                thumbnail: data.cover || data.thumbnail,
-                formats,
-                best: data.video_url_no_watermark || data.video_url
-            };
-        }
-        throw new Error('TikTok API failed');
-    } catch (error) {
-        // Fallback using ssstik
-        const response = await axios.get('https://ssstik.io/abc', {
-            params: { url },
-            headers: { 'User-Agent': getRandomUserAgent() }
-        });
-        const $ = cheerio.load(response.data);
-        const videoUrl = $('a.download-link').attr('href');
-        
-        if (!videoUrl) throw new Error('Could not extract TikTok video');
-        
-        return {
-            success: true,
-            title: 'TikTok Video',
-            platform: 'TikTok',
-            thumbnail: null,
-            formats: [{ quality: 'HD', url: videoUrl, ext: 'mp4' }],
-            best: videoUrl
-        };
+        await execPromise("yt-dlp --version");
+        return true;
+    } catch {
+        return false;
     }
 };
 
 // ===============================
-// YouTube Downloader (yt-dlp)
+// Universal Downloader (yt-dlp)
 // ===============================
-const downloadYouTube = (url) => {
-    return new Promise((resolve, reject) => {
-        const cmd = `yt-dlp -j --no-warnings --cookies cookies.txt "${url}"`;
+const downloadVideo = async (url) => {
+    const platform = getPlatformFromUrl(url);
+    
+    // Check cookies file exists
+    const cookiesPath = path.join(__dirname, "cookies.txt");
+    const cookiesArg = fs.existsSync(cookiesPath) ? `--cookies "${cookiesPath}"` : "";
+    
+    // Use yt-dlp for all platforms (most reliable)
+    const cmd = `yt-dlp -j --no-warnings ${cookiesArg} "${url}"`;
+    
+    try {
+        const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
+        const info = JSON.parse(stdout);
         
-        exec(cmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout) => {
-            if (error) {
-                reject(new Error("yt-dlp failed"));
-                return;
-            }
-            try {
-                const info = JSON.parse(stdout);
-                let formats = (info.formats || [])
-                    .filter(f => f.url && f.vcodec !== "none")
-                    .map(f => ({
-                        quality: f.format_note || `${f.height || ""}p`,
-                        url: f.url,
-                        ext: f.ext
-                    }))
-                    .sort((a, b) => (parseInt(b.quality) || 0) - (parseInt(a.quality) || 0));
+        // Filter and format video formats
+        let formats = (info.formats || [])
+            .filter(f => f.url && (f.vcodec !== "none" || f.acodec !== "none"))
+            .map(f => ({
+                quality: f.format_note || `${f.height || ""}p` || "Unknown",
+                url: f.url,
+                ext: f.ext || "mp4",
+                hasVideo: f.vcodec !== "none",
+                hasAudio: f.acodec !== "none"
+            }))
+            .filter(f => f.hasVideo) // Only video formats
+            .sort((a, b) => {
+                const qa = parseInt(a.quality) || 0;
+                const qb = parseInt(b.quality) || 0;
+                return qb - qa;
+            });
 
-                resolve({
-                    success: true,
-                    title: info.title,
-                    platform: 'YouTube',
-                    thumbnail: info.thumbnail,
-                    formats,
-                    best: info.url
-                });
-            } catch (e) {
-                reject(new Error("Parsing error"));
-            }
-        });
-    });
+        // If no formats found, try to get direct URL
+        if (formats.length === 0 && info.url) {
+            formats.push({
+                quality: "Best",
+                url: info.url,
+                ext: info.ext || "mp4"
+            });
+        }
+
+        return {
+            success: true,
+            title: info.title || "Untitled",
+            platform: platform.charAt(0).toUpperCase() + platform.slice(1),
+            thumbnail: info.thumbnail || null,
+            duration: info.duration_string || info.duration || null,
+            uploader: info.uploader || info.channel || info.author || null,
+            formats: formats,
+            best: info.url || (formats[0]?.url) || null
+        };
+        
+    } catch (error) {
+        console.error(`Error downloading from ${platform}:`, error.message);
+        throw new Error(`Failed to download from ${platform}. Make sure yt-dlp is installed and URL is valid.`);
+    }
 };
 
 // ===============================
-// Routes
+// API Routes
 // ===============================
 app.get("/", (req, res) => {
-    res.send("Social Downloader API is Online 🚀");
+    res.json({
+        status: "online",
+        message: "Social Downloader API is Online 🚀",
+        supported_platforms: ["YouTube", "TikTok", "Instagram", "Twitter/X", "Facebook"],
+        endpoints: {
+            download: "POST /api/download",
+            direct: "GET /api/direct?url=URL"
+        }
+    });
 });
 
 app.post("/api/download", async (req, res) => {
     const { url } = req.body;
-    if (!url) return res.status(400).json({ success: false, error: "URL is required" });
 
-    const platform = getPlatformFromUrl(url);
-    
+    if (!url) {
+        return res.status(400).json({
+            success: false,
+            error: "URL is required"
+        });
+    }
+
+    // Check if yt-dlp is installed
+    const hasYtDlp = await checkYtDlp();
+    if (!hasYtDlp) {
+        return res.status(500).json({
+            success: false,
+            error: "yt-dlp is not installed. Please install it first: pip install yt-dlp"
+        });
+    }
+
     try {
-        let result;
-        if (platform === 'tiktok') {
-            result = await downloadTikTok(url);
-        } else {
-            // YouTube and others via yt-dlp
-            result = await downloadYouTube(url);
-        }
+        const result = await downloadVideo(url);
         res.json(result);
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
     }
 });
 
-app.get("/api/direct", (req, res) => {
+// ===============================
+// Direct Download (Streaming)
+// ===============================
+app.get("/api/direct", async (req, res) => {
     const { url } = req.query;
-    if (!url) return res.status(400).json({ success: false, error: "URL is required" });
+
+    if (!url) {
+        return res.status(400).json({
+            success: false,
+            error: "URL is required"
+        });
+    }
+
+    const hasYtDlp = await checkYtDlp();
+    if (!hasYtDlp) {
+        return res.status(500).json({
+            success: false,
+            error: "yt-dlp is not installed"
+        });
+    }
 
     const fileName = `video_${Date.now()}.mp4`;
-    const ytProcess = spawn("yt-dlp", ["-f", "best", "-o", "-", url]);
     
+    const cookiesPath = path.join(__dirname, "cookies.txt");
+    const cookiesArg = fs.existsSync(cookiesPath) ? ["--cookies", cookiesPath] : [];
+    
+    const args = [
+        "-f", "best[ext=mp4]/best",
+        "-o", "-",
+        ...cookiesArg,
+        url
+    ];
+
+    const ytProcess = spawn("yt-dlp", args);
+
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
     res.setHeader("Content-Type", "video/mp4");
-    
+
     ytProcess.stdout.pipe(res);
-    ytProcess.stderr.on("data", (data) => console.error("yt-dlp error:", data.toString()));
-    ytProcess.on("error", () => {
-        if (!res.headersSent) res.status(500).json({ success: false, error: "Download failed" });
+
+    ytProcess.stderr.on("data", (data) => {
+        console.error("yt-dlp error:", data.toString());
+    });
+
+    ytProcess.on("error", (err) => {
+        console.error("Spawn error:", err);
+        if (!res.headersSent) {
+            res.status(500).json({
+                success: false,
+                error: "Failed to start download"
+            });
+        }
+    });
+
+    ytProcess.on("close", (code) => {
+        if (code !== 0 && !res.headersSent) {
+            res.status(500).json({
+                success: false,
+                error: "Download process failed"
+            });
+        }
     });
 });
 
-app.listen(PORT, () => {
+// ===============================
+// Error Handler
+// ===============================
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({
+        success: false,
+        error: "Internal server error"
+    });
+});
+
+app.listen(PORT, async () => {
+    const hasYtDlp = await checkYtDlp();
     console.log(`🚀 Server running on port ${PORT}`);
+    console.log(hasYtDlp ? "✅ yt-dlp is installed" : "⚠️  Warning: yt-dlp is not installed!");
+    console.log("📱 Supported: YouTube, TikTok, Instagram, Twitter/X, Facebook");
 });
