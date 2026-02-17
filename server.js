@@ -43,13 +43,12 @@ const getRandomUserAgent = () => {
 };
 
 // ===============================
-// YouTube Downloader (بدون cookies أولاً، مع extractors مختلفة)
+// YouTube Downloader (فيديو فقط - بدون صوت منفصل)
 // ===============================
 const downloadYouTube = async (url) => {
     const cookiesPath = path.join(__dirname, "cookies.txt");
     const hasCookies = fs.existsSync(cookiesPath);
     
-    // Method 1: Try without cookies first (with android client to bypass bot detection)
     try {
         console.log('Trying YouTube without cookies...');
         const cmd = `yt-dlp -j --no-warnings --extractor-args "youtube:player_client=android" "${url}"`;
@@ -58,7 +57,6 @@ const downloadYouTube = async (url) => {
     } catch (error1) {
         console.log('Method 1 failed:', error1.message);
         
-        // Method 2: Try with cookies if available
         if (hasCookies) {
             try {
                 console.log('Trying YouTube with cookies...');
@@ -70,7 +68,6 @@ const downloadYouTube = async (url) => {
             }
         }
         
-        // Method 3: Try with ios client
         try {
             console.log('Trying YouTube with iOS client...');
             const cmd = `yt-dlp -j --no-warnings --extractor-args "youtube:player_client=ios" "${url}"`;
@@ -86,22 +83,25 @@ const downloadYouTube = async (url) => {
 const parseYouTubeData = (stdout) => {
     const info = JSON.parse(stdout);
     
+    // فيديو فقط - بدون صوت منفصل
     let formats = (info.formats || [])
-        .filter(f => f.url && f.vcodec !== "none")
+        .filter(f => {
+            // لازم يكون فيديو (vcodec مش none) ويكون فيه ارتفاع (height)
+            return f.url && 
+                   f.vcodec !== "none" && 
+                   f.vcodec !== null && 
+                   f.height > 0;
+        })
         .map(f => ({
-            quality: f.format_note || `${f.height || ""}p` || "Unknown",
+            quality: f.format_note || `${f.height}p` || "HD",
             url: f.url,
             ext: f.ext || "mp4"
         }))
         .sort((a, b) => (parseInt(b.quality) || 0) - (parseInt(a.quality) || 0))
         .slice(0, 10);
 
-    if (formats.length === 0 && info.url) {
-        formats.push({
-            quality: "Best",
-            url: info.url,
-            ext: info.ext || "mp4"
-        });
+    if (formats.length === 0) {
+        throw new Error('No video formats found');
     }
 
     return {
@@ -111,16 +111,15 @@ const parseYouTubeData = (stdout) => {
         thumbnail: info.thumbnail || null,
         duration: info.duration_string || null,
         uploader: info.uploader || info.channel || null,
-        formats,
-        best: info.url || formats[0]?.url || null
+        formats, // فيديو فقط
+        best: formats[0].url // أول فيديو (أحسن جودة)
     };
 };
 
 // ===============================
-// TikTok Downloader (API خارجي - أحسن من yt-dlp للـ TikTok)
+// TikTok Downloader (فيديو فقط)
 // ===============================
 const downloadTikTok = async (url) => {
-    // Method 1: tikwm.com API (الأفضل والأسرع)
     try {
         console.log('Trying TikTok with tikwm API...');
         const response = await axios.post('https://www.tikwm.com/api/', 
@@ -140,7 +139,7 @@ const downloadTikTok = async (url) => {
 
         const formats = [];
         
-        // HD video (no watermark)
+        // HD video فقط
         if (data.hdplay) {
             formats.push({
                 quality: 'HD (No Watermark)',
@@ -149,7 +148,7 @@ const downloadTikTok = async (url) => {
             });
         }
         
-        // SD video (no watermark)
+        // SD video فقط
         if (data.play) {
             formats.push({
                 quality: 'SD (No Watermark)',
@@ -158,7 +157,7 @@ const downloadTikTok = async (url) => {
             });
         }
 
-        // With watermark
+        // With watermark (فيديو)
         if (data.wmplay && data.wmplay !== data.play) {
             formats.push({
                 quality: 'With Watermark',
@@ -167,7 +166,7 @@ const downloadTikTok = async (url) => {
             });
         }
 
-        if (formats.length === 0) throw new Error('No formats found');
+        if (formats.length === 0) throw new Error('No video formats found');
 
         return {
             success: true,
@@ -176,17 +175,15 @@ const downloadTikTok = async (url) => {
             thumbnail: data.cover || data.origin_cover,
             duration: data.duration,
             uploader: data.author?.nickname,
-            formats,
-            best: formats[0].url
+            formats, // فيديو فقط
+            best: formats[0].url // أول فيديو
         };
     } catch (error1) {
         console.log('TikTok Method 1 failed:', error1.message);
         
-        // Method 2: ssstik.io
         try {
             console.log('Trying TikTok with ssstik...');
             
-            // Get token first
             const tokenRes = await axios.get('https://ssstik.io/en', {
                 headers: { 'User-Agent': getRandomUserAgent() }
             });
@@ -223,7 +220,7 @@ const downloadTikTok = async (url) => {
                     url: videoUrl,
                     ext: 'mp4'
                 }],
-                best: videoUrl
+                best: videoUrl // فيديو مضمون
             };
         } catch (error2) {
             console.log('TikTok Method 2 failed:', error2.message);
@@ -233,7 +230,7 @@ const downloadTikTok = async (url) => {
 };
 
 // ===============================
-// Instagram Downloader (yt-dlp مع cookies)
+// Instagram Downloader (فيديو فقط)
 // ===============================
 const downloadInstagram = async (url) => {
     try {
@@ -244,14 +241,24 @@ const downloadInstagram = async (url) => {
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
+        // فيديو فقط - بدون صور أو صوت منفصل
         const formats = (info.formats || [])
-            .filter(f => f.url)
+            .filter(f => {
+                return f.url && 
+                       f.vcodec !== "none" && 
+                       f.vcodec !== null && 
+                       f.height > 0; // فيديو فعلي
+            })
             .map(f => ({
-                quality: f.format_note || 'HD',
+                quality: f.format_note || `${f.height}p` || 'HD',
                 url: f.url,
                 ext: f.ext || 'mp4'
             }))
             .slice(0, 5);
+
+        if (formats.length === 0) {
+            throw new Error('No video formats found');
+        }
 
         return {
             success: true,
@@ -259,8 +266,8 @@ const downloadInstagram = async (url) => {
             platform: 'Instagram',
             thumbnail: info.thumbnail,
             uploader: info.uploader,
-            formats,
-            best: formats[0]?.url || info.url
+            formats, // فيديو فقط
+            best: formats[0].url // فيديو مضمون
         };
     } catch (error) {
         throw new Error('Instagram download failed: ' + error.message);
@@ -268,7 +275,7 @@ const downloadInstagram = async (url) => {
 };
 
 // ===============================
-// Facebook Downloader (yt-dlp)
+// Facebook Downloader (فيديو فقط)
 // ===============================
 const downloadFacebook = async (url) => {
     try {
@@ -276,14 +283,24 @@ const downloadFacebook = async (url) => {
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
+        // فيديو فقط
         const formats = (info.formats || [])
-            .filter(f => f.url && f.vcodec !== "none")
+            .filter(f => {
+                return f.url && 
+                       f.vcodec !== "none" && 
+                       f.vcodec !== null && 
+                       f.height > 0;
+            })
             .map(f => ({
-                quality: f.format_note || 'HD',
+                quality: f.format_note || `${f.height}p` || 'HD',
                 url: f.url,
                 ext: f.ext || 'mp4'
             }))
             .slice(0, 5);
+
+        if (formats.length === 0) {
+            throw new Error('No video formats found');
+        }
 
         return {
             success: true,
@@ -291,8 +308,8 @@ const downloadFacebook = async (url) => {
             platform: 'Facebook',
             thumbnail: info.thumbnail,
             uploader: info.uploader,
-            formats,
-            best: formats[0]?.url || info.url
+            formats, // فيديو فقط
+            best: formats[0].url // فيديو مضمون
         };
     } catch (error) {
         throw new Error('Facebook download failed: ' + error.message);
@@ -300,7 +317,7 @@ const downloadFacebook = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (yt-dlp)
+// Snapchat Downloader (فيديو فقط)
 // ===============================
 const downloadSnapchat = async (url) => {
     try {
@@ -308,14 +325,24 @@ const downloadSnapchat = async (url) => {
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
+        // فيديو فقط
         const formats = (info.formats || [])
-            .filter(f => f.url && f.vcodec !== "none")
+            .filter(f => {
+                return f.url && 
+                       f.vcodec !== "none" && 
+                       f.vcodec !== null && 
+                       f.height > 0;
+            })
             .map(f => ({
-                quality: f.format_note || 'HD',
+                quality: f.format_note || `${f.height}p` || 'HD',
                 url: f.url,
                 ext: f.ext || 'mp4'
             }))
             .slice(0, 5);
+
+        if (formats.length === 0) {
+            throw new Error('No video formats found');
+        }
 
         return {
             success: true,
@@ -323,8 +350,8 @@ const downloadSnapchat = async (url) => {
             platform: 'Snapchat',
             thumbnail: info.thumbnail,
             uploader: info.uploader,
-            formats,
-            best: formats[0]?.url || info.url
+            formats, // فيديو فقط
+            best: formats[0].url // فيديو مضمون
         };
     } catch (error) {
         throw new Error('Snapchat download failed: ' + error.message);
@@ -332,7 +359,7 @@ const downloadSnapchat = async (url) => {
 };
 
 // ===============================
-// Twitter/X Downloader (yt-dlp)
+// Twitter/X Downloader (فيديو فقط)
 // ===============================
 const downloadTwitter = async (url) => {
     try {
@@ -340,14 +367,24 @@ const downloadTwitter = async (url) => {
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
+        // فيديو فقط
         const formats = (info.formats || [])
-            .filter(f => f.url && f.vcodec !== "none")
+            .filter(f => {
+                return f.url && 
+                       f.vcodec !== "none" && 
+                       f.vcodec !== null && 
+                       f.height > 0;
+            })
             .map(f => ({
-                quality: f.format_note || 'HD',
+                quality: f.format_note || `${f.height}p` || 'HD',
                 url: f.url,
                 ext: f.ext || 'mp4'
             }))
             .slice(0, 5);
+
+        if (formats.length === 0) {
+            throw new Error('No video formats found');
+        }
 
         return {
             success: true,
@@ -355,8 +392,8 @@ const downloadTwitter = async (url) => {
             platform: 'Twitter',
             thumbnail: info.thumbnail,
             uploader: info.uploader,
-            formats,
-            best: formats[0]?.url || info.url
+            formats, // فيديو فقط
+            best: formats[0].url // فيديو مضمون
         };
     } catch (error) {
         throw new Error('Twitter download failed: ' + error.message);
