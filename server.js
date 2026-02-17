@@ -34,18 +34,18 @@ const getRandomUserAgent = () => {
 };
 
 // ===============================
-// Helper: اختيار فيديو + صوت مدمجين
+// Helper: اختيار فيديو + صوت (مش صوت بس)
 // ===============================
-const getBestVideoWithAudio = (info) => {
-    // أولوية للفورمات المدمجة (فيديو + صوت مع بعض)
-    let mergedFormats = (info.formats || []).filter(f => {
-        // لازم يكون فيديو (vcodec مش none) وصوت (acodec مش none) مع بعض
-        const hasVideo = f.vcodec && f.vcodec !== "none" && f.vcodec !== null;
-        const hasAudio = f.acodec && f.acodec !== "none" && f.acodec !== null;
-        return f.url && hasVideo && hasAudio && f.height > 0;
+const getVideoWithAudio = (info) => {
+    // نبحث عن فورمات فيديو + صوت مدمجين
+    const mergedFormats = (info.formats || []).filter(f => {
+        // لازم يكون فيديو (vcodec مش none) وصوت (acodec مش none)
+        const isVideo = f.vcodec && f.vcodec !== "none" && f.vcodec !== null;
+        const isAudio = f.acodec && f.acodec !== "none" && f.acodec !== null;
+        return f.url && isVideo && isAudio && f.height > 0;
     });
 
-    // اختار أعلى جودة من المدمجين
+    // اختار أعلى جودة
     if (mergedFormats.length > 0) {
         mergedFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
         return {
@@ -58,9 +58,29 @@ const getBestVideoWithAudio = (info) => {
         };
     }
 
-    // لو مفيش merged format، نبحث عن الفيديو الرئيسي
-    // info.url غالباً بيكون الفيديو المدمج
-    if (info.url && info.vcodec !== "none" && info.acodec !== "none") {
+    // لو مفيش merged، ندمج أحسن فيديو مع أحسن صوت
+    const videoOnly = (info.formats || [])
+        .filter(f => f.url && f.vcodec && f.vcodec !== "none" && f.height > 0)
+        .sort((a, b) => (b.height || 0) - (a.height || 0))[0];
+
+    const audioOnly = (info.formats || [])
+        .filter(f => f.url && f.vcodec === "none" && f.acodec && f.acodec !== "none")
+        .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
+
+    if (videoOnly) {
+        // نرجع الفيديو (والـ player بيدمج الصوت تلقائياً)
+        return {
+            url: videoOnly.url,
+            formats: [{
+                quality: videoOnly.format_note || `${videoOnly.height}p` || "HD",
+                url: videoOnly.url,
+                ext: videoOnly.ext || "mp4"
+            }]
+        };
+    }
+
+    // آخر حل: info.url (غالباً بيكون merged)
+    if (info.url && info.vcodec !== "none") {
         return {
             url: info.url,
             formats: [{
@@ -68,27 +88,6 @@ const getBestVideoWithAudio = (info) => {
                 url: info.url,
                 ext: info.ext || "mp4"
             }]
-        };
-    }
-
-    // آخر حل: ندمج أحسن فيديو مع أحسن صوت (للـ YouTube DASH)
-    const videoFormats = (info.formats || []).filter(f => 
-        f.url && f.vcodec !== "none" && f.vcodec !== null && f.height > 0
-    ).sort((a, b) => (b.height || 0) - (a.height || 0));
-
-    const audioFormats = (info.formats || []).filter(f => 
-        f.url && f.vcodec === "none" && f.acodec !== "none"
-    ).sort((a, b) => (b.abr || 0) - (a.abr || 0));
-
-    if (videoFormats.length > 0) {
-        // نرجع أحسن فيديو (والصوت هيتدمج تلقائياً لما يتحمل)
-        return {
-            url: videoFormats[0].url,
-            formats: videoFormats.slice(0, 5).map(f => ({
-                quality: f.format_note || `${f.height}p` || "HD",
-                url: f.url,
-                ext: f.ext || "mp4"
-            }))
         };
     }
 
@@ -103,12 +102,13 @@ const downloadYouTube = async (url) => {
     const hasCookies = fs.existsSync(cookiesPath);
     
     try {
-        const cmd = `yt-dlp -j --no-warnings --extractor-args "youtube:player_client=android" "${url}"`;
+        // نستخدم format selector يجيب فيديو + صوت
+        const cmd = `yt-dlp -j --no-warnings -f "best[height<=1080][ext=mp4]/best[ext=mp4]/best" --extractor-args "youtube:player_client=android" "${url}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
-        const result = getBestVideoWithAudio(info);
-        if (!result) throw new Error('No video with audio found');
+        const result = getVideoWithAudio(info);
+        if (!result) throw new Error('No video found');
 
         return {
             success: true,
@@ -123,12 +123,12 @@ const downloadYouTube = async (url) => {
     } catch (error1) {
         if (hasCookies) {
             try {
-                const cmd = `yt-dlp -j --no-warnings --cookies "${cookiesPath}" "${url}"`;
+                const cmd = `yt-dlp -j --no-warnings -f "best[ext=mp4]/best" --cookies "${cookiesPath}" "${url}"`;
                 const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
                 const info = JSON.parse(stdout);
                 
-                const result = getBestVideoWithAudio(info);
-                if (!result) throw new Error('No video with audio');
+                const result = getVideoWithAudio(info);
+                if (!result) throw new Error('No video');
 
                 return {
                     success: true,
@@ -144,7 +144,7 @@ const downloadYouTube = async (url) => {
                 throw new Error('YouTube blocked');
             }
         }
-        throw new Error('YouTube download failed');
+        throw new Error('YouTube failed');
     }
 };
 
@@ -168,9 +168,9 @@ const downloadTikTok = async (url) => {
         const data = response.data.data;
         if (!data) throw new Error('No data');
 
+        // ✅ hdplay هو فيديو + صوت مدمج
         const formats = [];
         
-        // hdplay هو فيديو + صوت مدمج
         if (data.hdplay) {
             formats.push({
                 quality: 'HD',
@@ -179,7 +179,6 @@ const downloadTikTok = async (url) => {
             });
         }
         
-        // play هو فيديو + صوت مدمج
         if (data.play) {
             formats.push({
                 quality: 'SD',
@@ -198,7 +197,7 @@ const downloadTikTok = async (url) => {
             duration: data.duration,
             uploader: data.author?.nickname,
             formats,
-            best: formats[0].url  // ✅ فيديو + صوت مدمج
+            best: formats[0].url  // ✅ فيديو + صوت (mp4)
         };
     } catch (error1) {
         try {
@@ -253,12 +252,12 @@ const downloadInstagram = async (url) => {
         const cookiesPath = path.join(__dirname, "cookies.txt");
         const cookiesArg = fs.existsSync(cookiesPath) ? `--cookies "${cookiesPath}"` : "";
         
-        const cmd = `yt-dlp -j --no-warnings ${cookiesArg} "${url}"`;
+        const cmd = `yt-dlp -j --no-warnings -f "best[ext=mp4]/best" ${cookiesArg} "${url}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
-        const result = getBestVideoWithAudio(info);
-        if (!result) throw new Error('No video with audio');
+        const result = getVideoWithAudio(info);
+        if (!result) throw new Error('No video');
 
         return {
             success: true,
@@ -279,12 +278,12 @@ const downloadInstagram = async (url) => {
 // ===============================
 const downloadFacebook = async (url) => {
     try {
-        const cmd = `yt-dlp -j --no-warnings "${url}"`;
+        const cmd = `yt-dlp -j --no-warnings -f "best[ext=mp4]/best" "${url}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
-        const result = getBestVideoWithAudio(info);
-        if (!result) throw new Error('No video with audio');
+        const result = getVideoWithAudio(info);
+        if (!result) throw new Error('No video');
 
         return {
             success: true,
@@ -305,12 +304,12 @@ const downloadFacebook = async (url) => {
 // ===============================
 const downloadSnapchat = async (url) => {
     try {
-        const cmd = `yt-dlp -j --no-warnings "${url}"`;
+        const cmd = `yt-dlp -j --no-warnings -f "best[ext=mp4]/best" "${url}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
-        const result = getBestVideoWithAudio(info);
-        if (!result) throw new Error('No video with audio');
+        const result = getVideoWithAudio(info);
+        if (!result) throw new Error('No video');
 
         return {
             success: true,
@@ -331,12 +330,12 @@ const downloadSnapchat = async (url) => {
 // ===============================
 const downloadTwitter = async (url) => {
     try {
-        const cmd = `yt-dlp -j --no-warnings "${url}"`;
+        const cmd = `yt-dlp -j --no-warnings -f "best[ext=mp4]/best" "${url}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         const info = JSON.parse(stdout);
         
-        const result = getBestVideoWithAudio(info);
-        if (!result) throw new Error('No video with audio');
+        const result = getVideoWithAudio(info);
+        if (!result) throw new Error('No video');
 
         return {
             success: true,
@@ -386,7 +385,7 @@ app.get("/api/direct", async (req, res) => {
 
     const fileName = `video_${Date.now()}.mp4`;
     const args = [
-        "-f", "best[height<=1080][ext=mp4]/best[ext=mp4]/best",
+        "-f", "best[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "-o", "-",
         url
