@@ -37,7 +37,6 @@ const getRandomUserAgent = () => {
 // Helper: فلترة الفيديوهات اللي فيها صوت مدمج
 // ===============================
 const getBestVideoWithAudio = (info) => {
-    // أولوية للفورمات المدمجة (فيديو + صوت مع بعض)
     let mergedFormats = (info.formats || []).filter(f => {
         return f.url && 
                f.vcodec !== "none" && 
@@ -47,13 +46,11 @@ const getBestVideoWithAudio = (info) => {
                f.height > 0;
     });
 
-    // اختار أعلى جودة
     if (mergedFormats.length > 0) {
         mergedFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
         return {
             url: mergedFormats[0].url,
             quality: mergedFormats[0].format_note || `${mergedFormats[0].height}p`,
-            height: mergedFormats[0].height,
             formats: mergedFormats.slice(0, 5).map(f => ({
                 quality: f.format_note || `${f.height}p` || "HD",
                 url: f.url,
@@ -62,12 +59,10 @@ const getBestVideoWithAudio = (info) => {
         };
     }
 
-    // لو مفيش merged format، استخدم info.url (اللي بيكون merged عادة)
     if (info.url) {
         return {
             url: info.url,
             quality: info.format_note || "Best",
-            height: info.height || 0,
             formats: [{
                 quality: info.format_note || "Best",
                 url: info.url,
@@ -80,7 +75,7 @@ const getBestVideoWithAudio = (info) => {
 };
 
 // ===============================
-// YouTube Downloader (فيديو + صوت مدمج)
+// YouTube Downloader
 // ===============================
 const downloadYouTube = async (url) => {
     const cookiesPath = path.join(__dirname, "cookies.txt");
@@ -102,7 +97,7 @@ const downloadYouTube = async (url) => {
             duration: info.duration_string || null,
             uploader: info.uploader || info.channel || null,
             formats: result.formats,
-            best: result.url // ✅ فيديو + صوت مدمج
+            best: result.url  // ✅ string زي ما كان
         };
     } catch (error1) {
         if (hasCookies) {
@@ -122,7 +117,7 @@ const downloadYouTube = async (url) => {
                     duration: info.duration_string,
                     uploader: info.uploader || info.channel,
                     formats: result.formats,
-                    best: result.url
+                    best: result.url  // ✅ string
                 };
             } catch (error2) {
                 throw new Error('YouTube blocked');
@@ -133,7 +128,7 @@ const downloadYouTube = async (url) => {
 };
 
 // ===============================
-// TikTok Downloader (فيديو + صوت مدمج)
+// TikTok Downloader
 // ===============================
 const downloadTikTok = async (url) => {
     try {
@@ -154,7 +149,6 @@ const downloadTikTok = async (url) => {
 
         const formats = [];
         
-        // hdplay هو فيديو + صوت مدمج
         if (data.hdplay) {
             formats.push({
                 quality: 'HD',
@@ -163,7 +157,6 @@ const downloadTikTok = async (url) => {
             });
         }
         
-        // play هو فيديو + صوت مدمج
         if (data.play) {
             formats.push({
                 quality: 'SD',
@@ -182,10 +175,9 @@ const downloadTikTok = async (url) => {
             duration: data.duration,
             uploader: data.author?.nickname,
             formats,
-            best: formats[0].url // ✅ فيديو + صوت مدمج
+            best: formats[0].url  // ✅ string زي ما كان
         };
     } catch (error1) {
-        // Fallback
         try {
             const tokenRes = await axios.get('https://ssstik.io/en', {
                 headers: { 'User-Agent': getRandomUserAgent() }
@@ -222,7 +214,7 @@ const downloadTikTok = async (url) => {
                     url: videoUrl,
                     ext: 'mp4'
                 }],
-                best: videoUrl // ✅ فيديو + صوت مدمج
+                best: videoUrl  // ✅ string
             };
         } catch (error2) {
             throw new Error('TikTok failed');
@@ -231,7 +223,7 @@ const downloadTikTok = async (url) => {
 };
 
 // ===============================
-// Instagram Downloader (فيديو + صوت)
+// Instagram Downloader
 // ===============================
 const downloadInstagram = async (url) => {
     try {
@@ -252,7 +244,7 @@ const downloadInstagram = async (url) => {
             thumbnail: info.thumbnail,
             uploader: info.uploader,
             formats: result.formats,
-            best: result.url // ✅ فيديو + صوت مدمج
+            best: result.url  // ✅ string
         };
     } catch (error) {
         throw new Error('Instagram failed: ' + error.message);
@@ -260,7 +252,7 @@ const downloadInstagram = async (url) => {
 };
 
 // ===============================
-// Facebook Downloader (فيديو + صوت)
+// Facebook Downloader
 // ===============================
 const downloadFacebook = async (url) => {
     try {
@@ -278,7 +270,7 @@ const downloadFacebook = async (url) => {
             thumbnail: info.thumbnail,
             uploader: info.uploader,
             formats: result.formats,
-            best: result.url // ✅ فيديو + صوت مدمج
+            best: result.url  // ✅ string
         };
     } catch (error) {
         throw new Error('Facebook failed: ' + error.message);
@@ -286,7 +278,7 @@ const downloadFacebook = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (فيديو + صوت)
+// Snapchat Downloader
 // ===============================
 const downloadSnapchat = async (url) => {
     try {
@@ -304,7 +296,7 @@ const downloadSnapchat = async (url) => {
             thumbnail: info.thumbnail,
             uploader: info.uploader,
             formats: result.formats,
-            best: result.url // ✅ فيديو + صوت مدمج
+            best: result.url  // ✅ string
         };
     } catch (error) {
         throw new Error('Snapchat failed: ' + error.message);
@@ -312,7 +304,7 @@ const downloadSnapchat = async (url) => {
 };
 
 // ===============================
-// Twitter/X Downloader (فيديو + صوت)
+// Twitter/X Downloader
 // ===============================
 const downloadTwitter = async (url) => {
     try {
@@ -330,7 +322,7 @@ const downloadTwitter = async (url) => {
             thumbnail: info.thumbnail,
             uploader: info.uploader,
             formats: result.formats,
-            best: result.url // ✅ فيديو + صوت مدمج
+            best: result.url  // ✅ string
         };
     } catch (error) {
         throw new Error('Twitter failed: ' + error.message);
@@ -363,7 +355,7 @@ app.post("/api/download", async (req, res) => {
 });
 
 // ===============================
-// Direct Download (فيديو + صوت)
+// Direct Download
 // ===============================
 app.get("/api/direct", async (req, res) => {
     const { url } = req.query;
