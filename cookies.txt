@@ -36,3 +36,21 @@
 .youtube.com	TRUE	/	TRUE	1786696591	__Secure-YNID	16.YT=lpkQmkSuk9Ix79NXg3h8FpdWZbitQTt61expHyH_G6tIzNqQDQiYa5cL0XQKwnqx5BANXONGv7LkiCjwee7ndTMbPVsO7s-5iIdefmizxlZn54rhU_ERTq91itLy4FaFmuCqGiWfdcZ--2JJjl-U34PuHEaadwoiyzLBZRPYuS3x-ODowoeI6firgxE9MHJl4cHxuRro6b_21sQNUPU05XySwgSj5m4MCmv8kFZ84RZrckSre_Quppg5G5FnfHDiQl0K5NshW04i6ghzDRapIQWqy9XB9HzmeMMvo71vTQLUjWmx-oqqYJywUEzC-GTk-zWM8Wa2tIeeVFCbdbkwhg
 .youtube.com	TRUE	/	TRUE	1786696591	__Secure-ROLLOUT_TOKEN	CJzmzfvIuJv7yQEQsfaekqTijwMYu6ri4IvbkgM%3D
 .youtube.com	TRUE	/	TRUE	0	YSC	c9PkoB-Y36c
+# Netscape HTTP Cookie File
+# https://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
+
+.instagram.com	TRUE	/	TRUE	1792748727	datr	t9TLaF6WjX0gkZfv7AaESFDW
+.instagram.com	TRUE	/	TRUE	1789724727	ig_did	60A17E39-633F-4052-983F-275964390C84
+.instagram.com	TRUE	/	TRUE	1789724783	ig_nrcb	1
+.instagram.com	TRUE	/	TRUE	1794224685	fbm_124024574287414	base_domain=.instagram.com
+.instagram.com	TRUE	/	TRUE	1792775472	ps_l	1
+.instagram.com	TRUE	/	TRUE	1792775472	ps_n	1
+.instagram.com	TRUE	/	TRUE	1799143013	mid	aS1mYwALAAHvSHlsI4HQKfT3DQ6w
+.instagram.com	TRUE	/	TRUE	1779453010	ds_user_id	80081758681
+.instagram.com	TRUE	/	TRUE	1772281461	wd	1366x617
+.instagram.com	TRUE	/	TRUE	1772095533	ig_direct_region_hint	"ATN\05480081758681\0541803026730:01fefdd79baa268b0ef58966c5fe42cba8dbd39e9df23bb79dbf81f674095aedee9e542c"
+.instagram.com	TRUE	/	TRUE	1806237010	csrftoken	K9p5g4lNsUNNsaxQ5RMi4xEXcmSARRBS
+.instagram.com	TRUE	/	TRUE	1803212672	sessionid	80081758681%3AsSXERZJOfaxOAW%3A17%3AAYhsTH5Fb4gM7f2jfDHl0mbaabSDMdPyKjNEq8_7gw
+.instagram.com	TRUE	/	TRUE	0	rur	"RVA\05480081758681\0541803213010:01fe18d426a7eaad7843b0b3795bd94ac2d480d50329546ac7c309a1d9e43e2d62b336fe"
+
