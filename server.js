@@ -43,22 +43,20 @@ const getRandomUserAgent = () => {
 };
 
 // ===============================
-// YouTube Downloader (بدون cookies أولاً، مع extractors مختلفة)
+// YouTube Downloader
 // ===============================
 const downloadYouTube = async (url) => {
     const cookiesPath = path.join(__dirname, "cookies.txt");
     const hasCookies = fs.existsSync(cookiesPath);
     
-    // Method 1: Try without cookies first (with android client to bypass bot detection)
     try {
-        console.log('Trying YouTube without cookies...');
+        console.log('Trying YouTube with yt-dlp...');
         const cmd = `yt-dlp -j --no-warnings --extractor-args "youtube:player_client=android" "${url}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         return parseYouTubeData(stdout);
     } catch (error1) {
         console.log('Method 1 failed:', error1.message);
         
-        // Method 2: Try with cookies if available
         if (hasCookies) {
             try {
                 console.log('Trying YouTube with cookies...');
@@ -70,7 +68,6 @@ const downloadYouTube = async (url) => {
             }
         }
         
-        // Method 3: Try with ios client
         try {
             console.log('Trying YouTube with iOS client...');
             const cmd = `yt-dlp -j --no-warnings --extractor-args "youtube:player_client=ios" "${url}"`;
@@ -117,10 +114,9 @@ const parseYouTubeData = (stdout) => {
 };
 
 // ===============================
-// TikTok Downloader (API خارجي - أحسن من yt-dlp للـ TikTok)
+// TikTok Downloader
 // ===============================
 const downloadTikTok = async (url) => {
-    // Method 1: tikwm.com API (الأفضل والأسرع)
     try {
         console.log('Trying TikTok with tikwm API...');
         const response = await axios.post('https://www.tikwm.com/api/', 
@@ -140,7 +136,6 @@ const downloadTikTok = async (url) => {
 
         const formats = [];
         
-        // HD video (no watermark)
         if (data.hdplay) {
             formats.push({
                 quality: 'HD (No Watermark)',
@@ -149,7 +144,6 @@ const downloadTikTok = async (url) => {
             });
         }
         
-        // SD video (no watermark)
         if (data.play) {
             formats.push({
                 quality: 'SD (No Watermark)',
@@ -158,7 +152,6 @@ const downloadTikTok = async (url) => {
             });
         }
 
-        // With watermark
         if (data.wmplay && data.wmplay !== data.play) {
             formats.push({
                 quality: 'With Watermark',
@@ -182,11 +175,8 @@ const downloadTikTok = async (url) => {
     } catch (error1) {
         console.log('TikTok Method 1 failed:', error1.message);
         
-        // Method 2: ssstik.io
         try {
             console.log('Trying TikTok with ssstik...');
-            
-            // Get token first
             const tokenRes = await axios.get('https://ssstik.io/en', {
                 headers: { 'User-Agent': getRandomUserAgent() }
             });
@@ -208,8 +198,7 @@ const downloadTikTok = async (url) => {
             });
             
             const $ = cheerio.load(res.data);
-            const videoUrl = $('a.download-link').attr('href') || 
-                           $('a[download]').attr('href');
+            const videoUrl = $('a.download-link').attr('href') || $('a[download]').attr('href');
             
             if (!videoUrl) throw new Error('No video URL found');
             
@@ -233,9 +222,10 @@ const downloadTikTok = async (url) => {
 };
 
 // ===============================
-// Instagram Downloader (yt-dlp مع cookies)
+// Instagram Downloader (yt-dlp + API fallback)
 // ===============================
 const downloadInstagram = async (url) => {
+    // Method 1: yt-dlp
     try {
         const cookiesPath = path.join(__dirname, "cookies.txt");
         const cookiesArg = fs.existsSync(cookiesPath) ? `--cookies "${cookiesPath}"` : "";
@@ -262,13 +252,92 @@ const downloadInstagram = async (url) => {
             formats,
             best: formats[0]?.url || info.url
         };
-    } catch (error) {
-        throw new Error('Instagram download failed: ' + error.message);
+    } catch (error1) {
+        console.log('Instagram yt-dlp failed:', error1.message);
+        
+        // Method 2: snapinsta API
+        try {
+            console.log('Trying Instagram with snapinsta API...');
+            return await downloadInstagramAPI(url);
+        } catch (error2) {
+            console.log('Instagram API failed:', error2.message);
+            throw new Error('Instagram download failed. The video may be private or requires login.');
+        }
     }
 };
 
 // ===============================
-// Facebook Downloader (yt-dlp)
+// Instagram External API (snapinsta)
+// ===============================
+const downloadInstagramAPI = async (url) => {
+    try {
+        const formData = new URLSearchParams();
+        formData.append('url', url);
+        formData.append('action', 'post');
+
+        const response = await axios.post('https://snapinsta.app/action.php', formData, {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://snapinsta.app/',
+                'Origin': 'https://snapinsta.app',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            timeout: 30000
+        });
+
+        const $ = cheerio.load(response.data);
+        const formats = [];
+        let title = 'Instagram Post';
+
+        // Extract download links
+        $('.download-bottom a').each((i, elem) => {
+            const href = $(elem).attr('href');
+            const text = $(elem).text().trim();
+            
+            if (href && (href.includes('.mp4') || href.includes('.jpg'))) {
+                const isVideo = href.includes('.mp4');
+                formats.push({
+                    quality: text || (isVideo ? 'HD' : 'Image'),
+                    url: href,
+                    ext: isVideo ? 'mp4' : 'jpg'
+                });
+            }
+        });
+
+        // Alternative selector
+        if (formats.length === 0) {
+            $('a[download]').each((i, elem) => {
+                const href = $(elem).attr('href');
+                if (href) {
+                    formats.push({
+                        quality: 'HD',
+                        url: href,
+                        ext: href.includes('.mp4') ? 'mp4' : 'jpg'
+                    });
+                }
+            });
+        }
+
+        if (formats.length > 0) {
+            return {
+                success: true,
+                title,
+                platform: 'Instagram',
+                thumbnail: null,
+                formats,
+                best: formats[0].url
+            };
+        }
+
+        throw new Error('Could not extract Instagram content');
+    } catch (error) {
+        throw new Error('Instagram API error: ' + error.message);
+    }
+};
+
+// ===============================
+// Facebook Downloader
 // ===============================
 const downloadFacebook = async (url) => {
     try {
@@ -300,7 +369,7 @@ const downloadFacebook = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (yt-dlp)
+// Snapchat Downloader
 // ===============================
 const downloadSnapchat = async (url) => {
     try {
@@ -332,7 +401,7 @@ const downloadSnapchat = async (url) => {
 };
 
 // ===============================
-// Twitter/X Downloader (yt-dlp)
+// Twitter/X Downloader
 // ===============================
 const downloadTwitter = async (url) => {
     try {
@@ -413,7 +482,7 @@ app.post("/api/download", async (req, res) => {
 });
 
 // ===============================
-// Direct Download (yt-dlp)
+// Direct Download
 // ===============================
 app.get("/api/direct", async (req, res) => {
     const { url } = req.query;
