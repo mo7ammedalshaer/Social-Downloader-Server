@@ -14,9 +14,6 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// ===============================
-// Helper: Detect Platform
-// ===============================
 const getPlatformFromUrl = (url) => {
     const patterns = {
         youtube: /youtube\.com|youtu\.be/i,
@@ -33,50 +30,166 @@ const getPlatformFromUrl = (url) => {
 };
 
 const getRandomUserAgent = () => {
-    const userAgents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
-    ];
-    return userAgents[Math.floor(Math.random() * userAgents.length)];
+    return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+};
+
+const extractYouTubeId = (url) => {
+    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\s?]+)/);
+    return match ? match[1] : null;
 };
 
 // ===============================
-// YouTube Downloader
+// YouTube Downloader (yt-dlp + savefrom API)
 // ===============================
 const downloadYouTube = async (url) => {
-    const cookiesPath = path.join(__dirname, "cookies.txt");
-    const hasCookies = fs.existsSync(cookiesPath);
-    
+    // Method 1: Try yt-dlp first
     try {
         console.log('Trying YouTube with yt-dlp...');
         const cmd = `yt-dlp -j --no-warnings --extractor-args "youtube:player_client=android" "${url}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
         return parseYouTubeData(stdout);
     } catch (error1) {
-        console.log('Method 1 failed:', error1.message);
+        console.log('yt-dlp failed:', error1.message);
         
-        if (hasCookies) {
+        // Method 2: savefrom.net API (الأكثر موثوقية للسيرفرات)
+        try {
+            console.log('Trying YouTube with savefrom API...');
+            return await downloadYouTubeSaveFrom(url);
+        } catch (error2) {
+            console.log('savefrom failed:', error2.message);
+            
+            // Method 3: y2mate API
             try {
-                console.log('Trying YouTube with cookies...');
-                const cmd = `yt-dlp -j --no-warnings --cookies "${cookiesPath}" "${url}"`;
-                const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
-                return parseYouTubeData(stdout);
-            } catch (error2) {
-                console.log('Method 2 failed:', error2.message);
+                console.log('Trying YouTube with y2mate API...');
+                return await downloadYouTubeY2mate(url);
+            } catch (error3) {
+                console.log('y2mate failed:', error3.message);
+                throw new Error('YouTube download failed. Please try again later.');
+            }
+        }
+    }
+};
+
+// ===============================
+// YouTube savefrom.net API
+// ===============================
+const downloadYouTubeSaveFrom = async (url) => {
+    try {
+        const response = await axios.get('https://worker.savefrom.net/savefrom.php', {
+            params: { url: url },
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Referer': 'https://savefrom.net/'
+            },
+            timeout: 30000
+        });
+
+        const data = response.data;
+        const videoId = extractYouTubeId(url);
+        
+        if (data && (data.url || data.links)) {
+            const formats = [];
+            const links = Array.isArray(data.links) ? data.links : (data.url ? [data] : []);
+            
+            links.forEach(link => {
+                if (link.url) {
+                    formats.push({
+                        quality: link.quality || link.q || '720p',
+                        url: link.url,
+                        ext: link.ext || 'mp4'
+                    });
+                }
+            });
+
+            if (formats.length === 0 && data.url) {
+                formats.push({
+                    quality: 'HD',
+                    url: data.url,
+                    ext: 'mp4'
+                });
+            }
+
+            if (formats.length > 0) {
+                return {
+                    success: true,
+                    title: data.meta?.title || data.title || 'YouTube Video',
+                    platform: 'YouTube',
+                    thumbnail: videoId ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` : null,
+                    duration: data.meta?.duration || data.duration || null,
+                    uploader: data.meta?.author || data.author || null,
+                    formats: formats.slice(0, 5),
+                    best: formats[0].url
+                };
             }
         }
         
-        try {
-            console.log('Trying YouTube with iOS client...');
-            const cmd = `yt-dlp -j --no-warnings --extractor-args "youtube:player_client=ios" "${url}"`;
-            const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 10 });
-            return parseYouTubeData(stdout);
-        } catch (error3) {
-            console.log('Method 3 failed:', error3.message);
-            throw new Error('YouTube blocked this request. Try again later or use a different video.');
+        throw new Error('No video found from savefrom');
+    } catch (error) {
+        throw new Error('savefrom API error: ' + error.message);
+    }
+};
+
+// ===============================
+// YouTube y2mate API
+// ===============================
+const downloadYouTubeY2mate = async (url) => {
+    const videoId = extractYouTubeId(url);
+    if (!videoId) throw new Error('Invalid YouTube URL');
+
+    try {
+        // Get video info from oembed
+        const infoRes = await axios.get(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+        const title = infoRes.data.title;
+
+        // Get download links from y2mate
+        const response = await axios.post('https://yt5s.io/api/ajaxSearch', 
+            new URLSearchParams({
+                q: url,
+                vt: 'home'
+            }), {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': getRandomUserAgent(),
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Referer': 'https://yt5s.io/'
+                },
+                timeout: 30000
+            }
+        );
+
+        const data = response.data;
+        
+        if (data && data.links && data.links.mp4) {
+            const formats = Object.values(data.links.mp4)
+                .filter(item => item.k || item.url)
+                .map(item => ({
+                    quality: item.q || item.quality || '720p',
+                    url: item.k || item.url,
+                    ext: 'mp4'
+                }))
+                .sort((a, b) => {
+                    const qa = parseInt(a.quality) || 0;
+                    const qb = parseInt(b.quality) || 0;
+                    return qb - qa;
+                });
+
+            if (formats.length > 0) {
+                return {
+                    success: true,
+                    title: title || data.title || 'YouTube Video',
+                    platform: 'YouTube',
+                    thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+                    duration: data.duration || null,
+                    uploader: data.author || null,
+                    formats: formats.slice(0, 5),
+                    best: formats[0].url
+                };
+            }
         }
+        
+        throw new Error('No formats from y2mate');
+    } catch (error) {
+        throw new Error('y2mate API error: ' + error.message);
     }
 };
 
@@ -118,7 +231,6 @@ const parseYouTubeData = (stdout) => {
 // ===============================
 const downloadTikTok = async (url) => {
     try {
-        console.log('Trying TikTok with tikwm API...');
         const response = await axios.post('https://www.tikwm.com/api/', 
             `url=${encodeURIComponent(url)}&hd=1`, 
             {
@@ -132,7 +244,7 @@ const downloadTikTok = async (url) => {
         );
 
         const data = response.data.data;
-        if (!data) throw new Error('No data from tikwm');
+        if (!data) throw new Error('No data');
 
         const formats = [];
         
@@ -152,15 +264,7 @@ const downloadTikTok = async (url) => {
             });
         }
 
-        if (data.wmplay && data.wmplay !== data.play) {
-            formats.push({
-                quality: 'With Watermark',
-                url: data.wmplay,
-                ext: 'mp4'
-            });
-        }
-
-        if (formats.length === 0) throw new Error('No formats found');
+        if (formats.length === 0) throw new Error('No video');
 
         return {
             success: true,
@@ -173,16 +277,13 @@ const downloadTikTok = async (url) => {
             best: formats[0].url
         };
     } catch (error1) {
-        console.log('TikTok Method 1 failed:', error1.message);
-        
         try {
-            console.log('Trying TikTok with ssstik...');
             const tokenRes = await axios.get('https://ssstik.io/en', {
                 headers: { 'User-Agent': getRandomUserAgent() }
             });
             
             const ttMatch = tokenRes.data.match(/tt:'([^']+)'/);
-            if (!ttMatch) throw new Error('No token found');
+            if (!ttMatch) throw new Error('No token');
             
             const formData = new URLSearchParams();
             formData.append('id', url);
@@ -200,8 +301,8 @@ const downloadTikTok = async (url) => {
             const $ = cheerio.load(res.data);
             const videoUrl = $('a.download-link').attr('href') || $('a[download]').attr('href');
             
-            if (!videoUrl) throw new Error('No video URL found');
-            
+            if (!videoUrl) throw new Error('No video');
+
             return {
                 success: true,
                 title: 'TikTok Video',
@@ -215,8 +316,7 @@ const downloadTikTok = async (url) => {
                 best: videoUrl
             };
         } catch (error2) {
-            console.log('TikTok Method 2 failed:', error2.message);
-            throw new Error('TikTok download failed. Please try another video.');
+            throw new Error('TikTok failed');
         }
     }
 };
@@ -225,7 +325,6 @@ const downloadTikTok = async (url) => {
 // Instagram Downloader (yt-dlp + savefrom API fallback)
 // ===============================
 const downloadInstagram = async (url) => {
-    // Method 1: yt-dlp
     try {
         const cookiesPath = path.join(__dirname, "cookies.txt");
         const cookiesArg = fs.existsSync(cookiesPath) ? `--cookies "${cookiesPath}"` : "";
@@ -255,71 +354,57 @@ const downloadInstagram = async (url) => {
     } catch (error1) {
         console.log('Instagram yt-dlp failed:', error1.message);
         
-        // Method 2: savefrom.net API
         try {
-            console.log('Trying Instagram with savefrom API...');
-            return await downloadInstagramSaveFrom(url);
-        } catch (error2) {
-            console.log('savefrom failed:', error2.message);
-            throw new Error('Instagram download failed. Please check the URL or try again later.');
-        }
-    }
-};
+            const response = await axios.get('https://worker.savefrom.net/savefrom.php', {
+                params: { url: url },
+                headers: {
+                    'User-Agent': getRandomUserAgent(),
+                    'Referer': 'https://savefrom.net/'
+                },
+                timeout: 30000
+            });
 
-// ===============================
-// Instagram savefrom.net API
-// ===============================
-const downloadInstagramSaveFrom = async (url) => {
-    try {
-        const response = await axios.get('https://worker.savefrom.net/savefrom.php', {
-            params: { url: url },
-            headers: {
-                'User-Agent': getRandomUserAgent(),
-                'Referer': 'https://savefrom.net/'
-            },
-            timeout: 30000
-        });
-
-        const data = response.data;
-        
-        if (data && (data.url || data.links)) {
-            const formats = [];
-            const links = Array.isArray(data.links) ? data.links : [data];
+            const data = response.data;
             
-            links.forEach(link => {
-                if (link.url && (link.url.includes('.mp4') || link.ext === 'mp4')) {
+            if (data && (data.url || data.links)) {
+                const formats = [];
+                const links = Array.isArray(data.links) ? data.links : [data];
+                
+                links.forEach(link => {
+                    if (link.url && (link.url.includes('.mp4') || link.ext === 'mp4')) {
+                        formats.push({
+                            quality: link.quality || link.q || 'HD',
+                            url: link.url,
+                            ext: 'mp4'
+                        });
+                    }
+                });
+
+                if (formats.length === 0 && data.url) {
                     formats.push({
-                        quality: link.quality || link.q || 'HD',
-                        url: link.url,
+                        quality: 'HD',
+                        url: data.url,
                         ext: 'mp4'
                     });
                 }
-            });
 
-            if (formats.length === 0 && data.url) {
-                formats.push({
-                    quality: 'HD',
-                    url: data.url,
-                    ext: 'mp4'
-                });
+                if (formats.length > 0) {
+                    return {
+                        success: true,
+                        title: data.meta?.title || data.title || 'Instagram Post',
+                        platform: 'Instagram',
+                        thumbnail: data.thumbnail || data.meta?.thumb || null,
+                        uploader: data.meta?.author || null,
+                        formats,
+                        best: formats[0].url
+                    };
+                }
             }
-
-            if (formats.length > 0) {
-                return {
-                    success: true,
-                    title: data.meta?.title || data.title || 'Instagram Post',
-                    platform: 'Instagram',
-                    thumbnail: data.thumbnail || data.meta?.thumb || null,
-                    uploader: data.meta?.author || null,
-                    formats,
-                    best: formats[0].url
-                };
-            }
+            
+            throw new Error('No video found');
+        } catch (error2) {
+            throw new Error('Instagram download failed. Please check the URL or try again later.');
         }
-        
-        throw new Error('No video found from savefrom');
-    } catch (error) {
-        throw new Error('savefrom API error: ' + error.message);
     }
 };
 
