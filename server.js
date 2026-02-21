@@ -222,7 +222,7 @@ const downloadTikTok = async (url) => {
 };
 
 // ===============================
-// Instagram Downloader (yt-dlp + API fallback)
+// Instagram Downloader (yt-dlp + savefrom API fallback)
 // ===============================
 const downloadInstagram = async (url) => {
     // Method 1: yt-dlp
@@ -255,84 +255,71 @@ const downloadInstagram = async (url) => {
     } catch (error1) {
         console.log('Instagram yt-dlp failed:', error1.message);
         
-        // Method 2: snapinsta API
+        // Method 2: savefrom.net API
         try {
-            console.log('Trying Instagram with snapinsta API...');
-            return await downloadInstagramAPI(url);
+            console.log('Trying Instagram with savefrom API...');
+            return await downloadInstagramSaveFrom(url);
         } catch (error2) {
-            console.log('Instagram API failed:', error2.message);
-            throw new Error('Instagram download failed. The video may be private or requires login.');
+            console.log('savefrom failed:', error2.message);
+            throw new Error('Instagram download failed. Please check the URL or try again later.');
         }
     }
 };
 
 // ===============================
-// Instagram External API (snapinsta)
+// Instagram savefrom.net API
 // ===============================
-const downloadInstagramAPI = async (url) => {
+const downloadInstagramSaveFrom = async (url) => {
     try {
-        const formData = new URLSearchParams();
-        formData.append('url', url);
-        formData.append('action', 'post');
-
-        const response = await axios.post('https://snapinsta.app/action.php', formData, {
+        const response = await axios.get('https://worker.savefrom.net/savefrom.php', {
+            params: { url: url },
             headers: {
                 'User-Agent': getRandomUserAgent(),
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': 'https://snapinsta.app/',
-                'Origin': 'https://snapinsta.app',
-                'X-Requested-With': 'XMLHttpRequest'
+                'Referer': 'https://savefrom.net/'
             },
             timeout: 30000
         });
 
-        const $ = cheerio.load(response.data);
-        const formats = [];
-        let title = 'Instagram Post';
-
-        // Extract download links
-        $('.download-bottom a').each((i, elem) => {
-            const href = $(elem).attr('href');
-            const text = $(elem).text().trim();
+        const data = response.data;
+        
+        if (data && (data.url || data.links)) {
+            const formats = [];
+            const links = Array.isArray(data.links) ? data.links : [data];
             
-            if (href && (href.includes('.mp4') || href.includes('.jpg'))) {
-                const isVideo = href.includes('.mp4');
-                formats.push({
-                    quality: text || (isVideo ? 'HD' : 'Image'),
-                    url: href,
-                    ext: isVideo ? 'mp4' : 'jpg'
-                });
-            }
-        });
-
-        // Alternative selector
-        if (formats.length === 0) {
-            $('a[download]').each((i, elem) => {
-                const href = $(elem).attr('href');
-                if (href) {
+            links.forEach(link => {
+                if (link.url && (link.url.includes('.mp4') || link.ext === 'mp4')) {
                     formats.push({
-                        quality: 'HD',
-                        url: href,
-                        ext: href.includes('.mp4') ? 'mp4' : 'jpg'
+                        quality: link.quality || link.q || 'HD',
+                        url: link.url,
+                        ext: 'mp4'
                     });
                 }
             });
-        }
 
-        if (formats.length > 0) {
-            return {
-                success: true,
-                title,
-                platform: 'Instagram',
-                thumbnail: null,
-                formats,
-                best: formats[0].url
-            };
-        }
+            if (formats.length === 0 && data.url) {
+                formats.push({
+                    quality: 'HD',
+                    url: data.url,
+                    ext: 'mp4'
+                });
+            }
 
-        throw new Error('Could not extract Instagram content');
+            if (formats.length > 0) {
+                return {
+                    success: true,
+                    title: data.meta?.title || data.title || 'Instagram Post',
+                    platform: 'Instagram',
+                    thumbnail: data.thumbnail || data.meta?.thumb || null,
+                    uploader: data.meta?.author || null,
+                    formats,
+                    best: formats[0].url
+                };
+            }
+        }
+        
+        throw new Error('No video found from savefrom');
     } catch (error) {
-        throw new Error('Instagram API error: ' + error.message);
+        throw new Error('savefrom API error: ' + error.message);
     }
 };
 
