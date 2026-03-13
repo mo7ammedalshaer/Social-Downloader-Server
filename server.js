@@ -34,19 +34,111 @@ const getRandomUserAgent = () => {
 };
 
 const extractYouTubeId = (url) => {
-    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\s?]+)/);
+    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([^&\s?]+)/);
     return match ? match[1] : null;
 };
 
+const isYouTubeShorts = (url) => /youtube\.com\/shorts\//i.test(url);
+
 // ===============================
-// YouTube Downloader (أسرع - y2mate مباشرة)
+// Resolve Snapchat Short Links (t/ links)
+// ===============================
+const resolveSnapchatShortLink = async (shortUrl) => {
+    try {
+        // إضافة www. لو مش موجود
+        let url = shortUrl;
+        if (!url.includes('www.')) {
+            url = url.replace('snapchat.com', 'www.snapchat.com');
+        }
+        
+        // محاولة 1: استخدام HEAD request مع maxRedirects: 0
+        try {
+            const response = await axios.head(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                },
+                maxRedirects: 0,
+                validateStatus: (status) => status >= 200 && status < 400,
+                timeout: 15000
+            });
+            
+            if (response.headers.location) {
+                return response.headers.location;
+            }
+        } catch (headError) {
+            if (headError.response?.headers?.location) {
+                return headError.response.headers.location;
+            }
+        }
+
+        // محاولة 2: استخدام GET مع maxRedirects: 0
+        try {
+            const response = await axios.get(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                },
+                maxRedirects: 0,
+                validateStatus: (status) => status >= 200 && status < 400,
+                timeout: 15000
+            });
+            
+            if (response.headers.location) {
+                return response.headers.location;
+            }
+
+            // البحث عن redirect في الـ HTML
+            const $ = cheerio.load(response.data);
+            const metaRefresh = $('meta[http-equiv="refresh"]').attr('content');
+            if (metaRefresh) {
+                const urlMatch = metaRefresh.match(/url=['"]?([^"']+)['"]?/i);
+                if (urlMatch) return urlMatch[1];
+            }
+            
+            // البحث عن JavaScript redirect
+            const scriptRedirect = response.data.match(/window\.location\.href\s*=\s*["']([^"']+)["']/);
+            if (scriptRedirect) return scriptRedirect[1];
+            
+        } catch (getError) {
+            if (getError.response?.headers?.location) {
+                return getError.response.headers.location;
+            }
+        }
+
+        // محاولة 3: استخدام unshorten.me API (مجاني)
+        try {
+            const { data } = await axios.get(`https://unshorten.me/json/${encodeURIComponent(shortUrl)}`, {
+                timeout: 10000
+            });
+            if (data?.resolved_url) {
+                return data.resolved_url;
+            }
+        } catch (e) {}
+
+        return null;
+    } catch (error) {
+        console.error('Error resolving short link:', error.message);
+        return null;
+    }
+};
+
+// ===============================
+// YouTube Downloader
 // ===============================
 const downloadYouTube = async (url) => {
     const videoId = extractYouTubeId(url);
     if (!videoId) throw new Error('Invalid YouTube URL');
 
     try {
-        // y2mate مباشرة (بدون oembed)
         const { data } = await axios.post('https://yt5s.io/api/ajaxSearch', 
             new URLSearchParams({ q: url, vt: 'home' }), 
             {
@@ -85,7 +177,6 @@ const downloadYouTube = async (url) => {
         }
         throw new Error('No formats');
     } catch (error) {
-        // Fallback سريع: savefrom
         try {
             const { data } = await axios.get('https://worker.savefrom.net/savefrom.php', {
                 params: { url },
@@ -117,7 +208,7 @@ const downloadYouTube = async (url) => {
 };
 
 // ===============================
-// TikTok Downloader (أسرع - tikwm مباشرة)
+// TikTok Downloader
 // ===============================
 const downloadTikTok = async (url) => {
     try {
@@ -153,7 +244,6 @@ const downloadTikTok = async (url) => {
             best: formats[0].url
         };
     } catch (error) {
-        // Fallback سريع: ssstik
         try {
             const tokenRes = await axios.get('https://ssstik.io/en', {
                 headers: { 'User-Agent': getRandomUserAgent() },
@@ -197,10 +287,9 @@ const downloadTikTok = async (url) => {
 };
 
 // ===============================
-// Instagram Downloader (أسرع - yt-dlp ثم savefrom)
+// Instagram Downloader
 // ===============================
 const downloadInstagram = async (url) => {
-    // Method 1: yt-dlp (أسرع لو شغال)
     try {
         const cookiesPath = path.join(__dirname, "cookies.txt");
         const cookiesArg = fs.existsSync(cookiesPath) ? `--cookies "${cookiesPath}"` : "";
@@ -210,8 +299,8 @@ const downloadInstagram = async (url) => {
         const info = JSON.parse(stdout);
         
         const formats = (info.formats || [])
-            .filter(f => f.url)
-            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: f.ext || 'mp4' }))
+            .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
+            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
             .slice(0, 5);
 
         if (formats.length > 0) {
@@ -227,7 +316,6 @@ const downloadInstagram = async (url) => {
         }
         throw new Error('No formats');
     } catch (error) {
-        // Method 2: savefrom API (أسرع من snapinsta)
         try {
             const { data } = await axios.get('https://worker.savefrom.net/savefrom.php', {
                 params: { url },
@@ -265,7 +353,7 @@ const downloadInstagram = async (url) => {
 };
 
 // ===============================
-// Facebook Downloader (yt-dlp - سريع)
+// Facebook Downloader
 // ===============================
 const downloadFacebook = async (url) => {
     try {
@@ -274,8 +362,8 @@ const downloadFacebook = async (url) => {
         const info = JSON.parse(stdout);
         
         const formats = (info.formats || [])
-            .filter(f => f.url && f.vcodec !== "none")
-            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: f.ext || 'mp4' }))
+            .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
+            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
             .slice(0, 5);
 
         if (formats.length === 0) throw new Error('No formats');
@@ -295,37 +383,7 @@ const downloadFacebook = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (yt-dlp - سريع)
-// ===============================
-const downloadSnapchat = async (url) => {
-    try {
-        const cmd = `yt-dlp -j --no-warnings "${url}"`;
-        const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 10000 });
-        const info = JSON.parse(stdout);
-        
-        const formats = (info.formats || [])
-            .filter(f => f.url && f.vcodec !== "none")
-            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: f.ext || 'mp4' }))
-            .slice(0, 5);
-
-        if (formats.length === 0) throw new Error('No formats');
-
-        return {
-            success: true,
-            title: info.title || 'Snapchat Video',
-            platform: 'Snapchat',
-            thumbnail: info.thumbnail,
-            uploader: info.uploader,
-            formats,
-            best: formats[0]?.url || info.url
-        };
-    } catch (error) {
-        throw new Error('Snapchat download failed');
-    }
-};
-
-// ===============================
-// Twitter/X Downloader (yt-dlp - سريع)
+// Twitter/X Downloader
 // ===============================
 const downloadTwitter = async (url) => {
     try {
@@ -334,8 +392,8 @@ const downloadTwitter = async (url) => {
         const info = JSON.parse(stdout);
         
         const formats = (info.formats || [])
-            .filter(f => f.url && f.vcodec !== "none")
-            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: f.ext || 'mp4' }))
+            .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
+            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
             .slice(0, 5);
 
         if (formats.length === 0) throw new Error('No formats');
@@ -351,6 +409,57 @@ const downloadTwitter = async (url) => {
         };
     } catch (error) {
         throw new Error('Twitter download failed');
+    }
+};
+
+// ===============================
+// Snapchat Downloader (يدعم Short Links + Spotlight + Stories)
+// ===============================
+const downloadSnapchat = async (url) => {
+    let targetUrl = url;
+    let isShortLink = false;
+    
+    // التحقق من short link (snapchat.com/t/...)
+    if (url.includes('/t/')) {
+        isShortLink = true;
+        console.log('Resolving Snapchat short link:', url);
+        
+        // Resolve the short link
+        const resolved = await resolveSnapchatShortLink(url);
+        if (resolved) {
+            targetUrl = resolved;
+            console.log('Resolved to:', targetUrl);
+        } else {
+            // لو مقدرناش نحل الـ short link، نجرب نستخدم yt-dlp مباشرة على الـ original URL
+            console.log('Failed to resolve short link, trying original URL with yt-dlp');
+        }
+    }
+    
+    // الآن نستخدم yt-dlp (أسرع طريقة)
+    try {
+        const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
+        const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
+        const info = JSON.parse(stdout);
+        
+        // فيديو فقط - استبعاد الصوت
+        const formats = (info.formats || [])
+            .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
+            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
+            .slice(0, 5);
+
+        if (formats.length === 0) throw new Error('No video formats found');
+
+        return {
+            success: true,
+            title: info.title || 'Snapchat Video',
+            platform: 'Snapchat',
+            thumbnail: info.thumbnail,
+            uploader: info.uploader,
+            formats,
+            best: formats[0]?.url || info.url
+        };
+    } catch (error) {
+        throw new Error(`Snapchat download failed - ${isShortLink ? 'short link resolve failed or ' : ''}yt-dlp error`);
     }
 };
 
