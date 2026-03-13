@@ -174,7 +174,7 @@ const downloadYouTube = async (url) => {
         try {
             const { data } = await axios.get('https://worker.savefrom.net/savefrom.php', {
                 params: { url },
-                headers: { 'User-Agent': getRandomUserAgent(), 'Referer': 'https://savefrom.net/' },
+                headers: { 'User-Agent': getRandomUserAgent(), 'Referer: 'https://savefrom.net/' },
                 timeout: 15000
             });
 
@@ -313,7 +313,7 @@ const downloadInstagram = async (url) => {
         try {
             const { data } = await axios.get('https://worker.savefrom.net/savefrom.php', {
                 params: { url },
-                headers: { 'User-Agent': getRandomUserAgent(), 'Referer': 'https://savefrom.net/' },
+                headers: { 'User-Agent': getRandomUserAgent(), 'Referer: 'https://savefrom.net/' },
                 timeout: 15000
             });
 
@@ -407,7 +407,7 @@ const downloadTwitter = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (yt-dlp فقط)
+// Snapchat Downloader (InstantSnapSave + SnapSaver + yt-dlp fallback)
 // ===============================
 const downloadSnapchat = async (url) => {
     let targetUrl = url;
@@ -415,7 +415,6 @@ const downloadSnapchat = async (url) => {
     // حل الروابط القصيرة
     if (url.includes('/t/')) {
         console.log('Resolving Snapchat short link:', url);
-        
         const resolved = await resolveSnapchatShortLink(url);
         if (resolved) {
             targetUrl = resolved;
@@ -423,6 +422,100 @@ const downloadSnapchat = async (url) => {
         }
     }
     
+    // Method 1: InstantSnapSave
+    try {
+        const formData = new URLSearchParams();
+        formData.append('url', targetUrl);
+        
+        const { data } = await axios.post('https://instantsnapsave.com/api/download', formData, {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://instantsnapsave.com/',
+                'Accept': 'application/json, text/plain, */*',
+                'Origin': 'https://instantsnapsave.com'
+            },
+            timeout: 30000
+        });
+        
+        if (data?.url || data?.downloadUrl || data?.videoUrl) {
+            const videoUrl = data.url || data.downloadUrl || data.videoUrl;
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                uploader: data.uploader || data.author || null,
+                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
+                best: videoUrl
+            };
+        }
+    } catch (error) {
+        console.log('InstantSnapSave failed:', error.message);
+    }
+    
+    // Method 2: SnapSaver.cc
+    try {
+        const { data } = await axios.post('https://snapsaver.cc/api/download', 
+            { url: targetUrl }, 
+            {
+                headers: {
+                    'User-Agent': getRandomUserAgent(),
+                    'Content-Type': 'application/json',
+                    'Referer': 'https://snapsaver.cc/',
+                    'Accept': 'application/json'
+                },
+                timeout: 30000
+            }
+        );
+        
+        if (data?.url || data?.videoUrl || data?.downloadUrl) {
+            const videoUrl = data.url || data.videoUrl || data.downloadUrl;
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                uploader: data.uploader || null,
+                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
+                best: videoUrl
+            };
+        }
+    } catch (error) {
+        console.log('SnapSaver.cc failed:', error.message);
+    }
+    
+    // Method 3: GetInDevice
+    try {
+        const formData = new URLSearchParams();
+        formData.append('url', targetUrl);
+        
+        const { data } = await axios.post('https://getindevice.com/api/snapchat', formData, {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://getindevice.com/',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            timeout: 30000
+        });
+        
+        if (data?.url || data?.videoUrl) {
+            const videoUrl = data.url || data.videoUrl;
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                formats: [{ quality: 'HD', url: videoUrl, ext: 'mp4' }],
+                best: videoUrl
+            };
+        }
+    } catch (error) {
+        console.log('GetInDevice failed:', error.message);
+    }
+    
+    // Method 4: yt-dlp fallback
     try {
         const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
