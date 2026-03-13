@@ -407,7 +407,7 @@ const downloadTwitter = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (SnapSaver.cc + ExpertsPHP + yt-dlp)
+// Snapchat Downloader (بدون yt-dlp - فقط مواقع الويب)
 // ===============================
 const downloadSnapchat = async (url) => {
     let targetUrl = url;
@@ -422,8 +422,20 @@ const downloadSnapchat = async (url) => {
         }
     }
     
-    // Method 1: SnapSaver.cc
+    // Method 1: محاولة استخدام snapsaver.cc مع استخراج مباشر
     try {
+        // أولاً نجيب الصفحة الرئيسية للحصول على أي توكنات
+        const homeRes = await axios.get('https://snapsaver.cc/', {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.google.com/'
+            },
+            timeout: 15000
+        });
+        
+        // نبعت الطلب للتحميل
         const formData = new URLSearchParams();
         formData.append('url', targetUrl);
         
@@ -437,70 +449,60 @@ const downloadSnapchat = async (url) => {
                 'Origin': 'https://snapsaver.cc',
                 'Upgrade-Insecure-Requests': '1'
             },
-            timeout: 30000
+            timeout: 30000,
+            maxRedirects: 5
         });
         
         const $ = cheerio.load(data);
-        
-        // البحث عن روابط التحميل في الصفحة
         const downloadLinks = [];
         
-        // البحث عن روابط مباشرة
-        $('a[href*=".mp4"], a.download-btn, a[download], .download-link').each((i, el) => {
+        // البحث عن جميع الروابط المحتملة
+        $('a').each((i, el) => {
             const href = $(el).attr('href');
-            const text = $(el).text();
-            const quality = text.match(/(\d+p|HD|4K|1080p|720p)/i)?.[1] || 'HD';
-            if (href && (href.includes('.mp4') || href.includes('http'))) {
-                downloadLinks.push({ quality, url: href, ext: 'mp4' });
+            const text = $(el).text().toLowerCase();
+            if (href && (href.includes('.mp4') || href.includes('download') || text.includes('download'))) {
+                const quality = text.match(/(\d+p|hd|4k|1080p|720p)/)?.[1] || 'HD';
+                downloadLinks.push({ quality: quality.toUpperCase(), url: href, ext: 'mp4' });
             }
         });
         
-        // البحث في الـ JSON embedded
-        const jsonMatch = data.match(/window\.__DATA__\s*=\s*({[^;]+});/) || 
-                         data.match(/var\s+data\s*=\s*({[^;]+});/);
-        if (jsonMatch) {
-            try {
-                const jsonData = JSON.parse(jsonMatch[1]);
-                if (jsonData.url || jsonData.videoUrl || jsonData.downloadUrl) {
-                    const videoUrl = jsonData.url || jsonData.videoUrl || jsonData.downloadUrl;
-                    downloadLinks.push({ 
-                        quality: jsonData.quality || 'HD', 
-                        url: videoUrl, 
-                        ext: 'mp4' 
-                    });
+        // البحث في السكريبتات
+        const scripts = $('script').map((i, el) => $(el).html()).get().join(' ');
+        const urlMatches = scripts.match(/(https:\/\/[^"'\s]+\.mp4[^"'\s]*)/gi);
+        if (urlMatches) {
+            urlMatches.forEach(url => {
+                if (!downloadLinks.some(l => l.url === url)) {
+                    downloadLinks.push({ quality: 'HD', url, ext: 'mp4' });
                 }
-            } catch (e) {}
+            });
         }
         
-        // البحث عن أي رابط mp4 في HTML
-        if (downloadLinks.length === 0) {
-            const mp4Matches = data.match(/(https:\/\/[^"']+\.mp4[^"']*)/gi);
-            if (mp4Matches) {
-                mp4Matches.forEach(url => {
-                    downloadLinks.push({ quality: 'HD', url, ext: 'mp4' });
-                });
-            }
+        // البحث في JSON
+        const jsonMatches = data.match(/"url"\s*:\s*"(https:\/\/[^"]+\.mp4[^"]*)"/gi);
+        if (jsonMatches) {
+            jsonMatches.forEach(match => {
+                const urlMatch = match.match(/"url"\s*:\s*"(https:\/\/[^"]+\.mp4[^"]*)"/i);
+                if (urlMatch && !downloadLinks.some(l => l.url === urlMatch[1])) {
+                    downloadLinks.push({ quality: 'HD', url: urlMatch[1], ext: 'mp4' });
+                }
+            });
         }
         
         if (downloadLinks.length > 0) {
-            const uniqueLinks = downloadLinks.filter((v, i, a) => 
-                a.findIndex(t => t.url === v.url) === i
-            );
-            
             return {
                 success: true,
                 title: 'Snapchat Video',
                 platform: 'Snapchat',
                 thumbnail: null,
-                formats: uniqueLinks.slice(0, 5),
-                best: uniqueLinks[0].url
+                formats: downloadLinks.slice(0, 5),
+                best: downloadLinks[0].url
             };
         }
     } catch (error) {
         console.log('SnapSaver.cc failed:', error.message);
     }
     
-    // Method 2: ExpertsPHP
+    // Method 2: محاولة استخدام expertsphp.com
     try {
         const formData = new URLSearchParams();
         formData.append('url', targetUrl);
@@ -515,105 +517,126 @@ const downloadSnapchat = async (url) => {
                 'Origin': 'https://www.expertsphp.com',
                 'Upgrade-Insecure-Requests': '1'
             },
-            timeout: 30000
+            timeout: 30000,
+            maxRedirects: 5
         });
         
         const $ = cheerio.load(data);
-        
         const downloadLinks = [];
         
         // البحث عن روابط التحميل
-        $('a[href*=".mp4"], a.download-btn, a[download], .download-link, #download-link').each((i, el) => {
+        $('a').each((i, el) => {
             const href = $(el).attr('href');
-            const text = $(el).text();
-            const quality = text.match(/(\d+p|HD|4K|1080p|720p)/i)?.[1] || 'HD';
-            if (href && (href.includes('.mp4') || href.includes('http'))) {
-                downloadLinks.push({ quality, url: href, ext: 'mp4' });
+            const text = $(el).text().toLowerCase();
+            if (href && (href.includes('.mp4') || text.includes('download') || text.includes('here'))) {
+                const quality = text.match(/(\d+p|hd|4k|1080p|720p)/)?.[1] || 'HD';
+                downloadLinks.push({ quality: quality.toUpperCase(), url: href, ext: 'mp4' });
             }
         });
         
-        // البحث في src للفيديوهات
-        $('video[src], source[src]').each((i, el) => {
+        // البحث في video tags
+        $('video source, video').each((i, el) => {
             const src = $(el).attr('src');
             if (src && src.includes('.mp4')) {
                 downloadLinks.push({ quality: 'HD', url: src, ext: 'mp4' });
             }
         });
         
-        // البحث في JSON
-        const jsonMatch = data.match(/window\.__DATA__\s*=\s*({[^;]+});/) || 
-                         data.match(/var\s+data\s*=\s*({[^;]+});/) ||
-                         data.match(/"url":\s*"([^"]+\.mp4[^"]*)"/);
-        if (jsonMatch && jsonMatch[1]) {
-            try {
-                if (jsonMatch[1].startsWith('http')) {
-                    downloadLinks.push({ quality: 'HD', url: jsonMatch[1], ext: 'mp4' });
-                } else {
-                    const jsonData = JSON.parse(jsonMatch[1]);
-                    if (jsonData.url || jsonData.videoUrl || jsonData.downloadUrl) {
-                        downloadLinks.push({ 
-                            quality: jsonData.quality || 'HD', 
-                            url: jsonData.url || jsonData.videoUrl || jsonData.downloadUrl, 
-                            ext: 'mp4' 
-                        });
-                    }
+        // البحث في السكريبتات
+        const scripts = $('script').map((i, el) => $(el).html()).get().join(' ');
+        const urlMatches = scripts.match(/(https:\/\/[^"'\s]+\.mp4[^"'\s]*)/gi);
+        if (urlMatches) {
+            urlMatches.forEach(url => {
+                if (!downloadLinks.some(l => l.url === url)) {
+                    downloadLinks.push({ quality: 'HD', url, ext: 'mp4' });
                 }
-            } catch (e) {}
+            });
         }
         
-        // البحث عن أي رابط mp4
-        if (downloadLinks.length === 0) {
-            const mp4Matches = data.match(/(https:\/\/[^"']+\.mp4[^"']*)/gi);
-            if (mp4Matches) {
-                mp4Matches.forEach(url => {
+        // البحث عن روابط مباشرة في HTML
+        const directMatches = data.match(/(https:\/\/[^"'\s]+\.mp4[^"'\s]*)/gi);
+        if (directMatches) {
+            directMatches.forEach(url => {
+                if (!downloadLinks.some(l => l.url === url)) {
                     downloadLinks.push({ quality: 'HD', url, ext: 'mp4' });
-                });
-            }
+                }
+            });
         }
         
         if (downloadLinks.length > 0) {
-            const uniqueLinks = downloadLinks.filter((v, i, a) => 
-                a.findIndex(t => t.url === v.url) === i
-            );
-            
             return {
                 success: true,
                 title: 'Snapchat Video',
                 platform: 'Snapchat',
                 thumbnail: null,
-                formats: uniqueLinks.slice(0, 5),
-                best: uniqueLinks[0].url
+                formats: downloadLinks.slice(0, 5),
+                best: downloadLinks[0].url
             };
         }
     } catch (error) {
         console.log('ExpertsPHP failed:', error.message);
     }
     
-    // Method 3: yt-dlp fallback
+    // Method 3: محاولة استخدام getindevice.com
     try {
-        const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
-        const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
-        const info = JSON.parse(stdout);
+        const formData = new URLSearchParams();
+        formData.append('url', targetUrl);
         
-        const formats = (info.formats || [])
-            .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
-            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
-            .slice(0, 5);
-
-        if (formats.length === 0) throw new Error('No video formats found');
-
-        return {
-            success: true,
-            title: info.title || 'Snapchat Video',
-            platform: 'Snapchat',
-            thumbnail: info.thumbnail,
-            uploader: info.uploader,
-            formats,
-            best: formats[0]?.url || info.url
-        };
+        const { data } = await axios.post('https://getindevice.com/wp-json/aio-dl/video-data/', formData, {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://getindevice.com/snap-video-saver/',
+                'Accept': 'application/json, text/plain, */*',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            timeout: 30000
+        });
+        
+        if (data?.url || data?.videoUrl || data?.downloadUrl) {
+            const videoUrl = data.url || data.videoUrl || data.downloadUrl;
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
+                best: videoUrl
+            };
+        }
     } catch (error) {
-        throw new Error(`Snapchat download failed: ${error.message}`);
+        console.log('GetInDevice failed:', error.message);
     }
+    
+    // Method 4: محاولة استخدام snapsave.app
+    try {
+        const { data } = await axios.get('https://snapsave.app/info', {
+            params: { url: targetUrl },
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': 'https://snapsave.app/'
+            },
+            timeout: 30000
+        });
+        
+        if (data?.url || data?.videoUrl || data?.downloadUrl) {
+            const videoUrl = data.url || data.videoUrl || data.downloadUrl;
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
+                best: videoUrl
+            };
+        }
+    } catch (error) {
+        console.log('SnapSave.app failed:', error.message);
+    }
+    
+    // إذا فشلت جميع الطرق
+    throw new Error('All Snapchat download methods failed. The link may be private or expired.');
 };
 
 // ===============================
