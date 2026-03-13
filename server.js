@@ -39,6 +39,55 @@ const extractYouTubeId = (url) => {
 };
 
 // ===============================
+// Resolve Snapchat Short Links (t/ links)
+// ===============================
+const resolveSnapchatShortLink = async (shortUrl) => {
+    try {
+        // استخدام axios مع maxRedirects: 0 عشان نمسك الـ redirect location
+        const response = await axios.get(shortUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            },
+            maxRedirects: 0,
+            validateStatus: (status) => status >= 200 && status < 400,
+            timeout: 15000
+        });
+        
+        // لو فيه redirect
+        if (response.headers.location) {
+            return response.headers.location;
+        }
+        
+        // لو مفيش redirect، نحاول نستخرج من الـ HTML
+        const $ = cheerio.load(response.data);
+        const metaRefresh = $('meta[http-equiv="refresh"]').attr('content');
+        if (metaRefresh) {
+            const urlMatch = metaRefresh.match(/url=(.+)/i);
+            if (urlMatch) return urlMatch[1];
+        }
+        
+        // البحث عن أي رابط في الصفحة
+        const spotlightLink = $('a[href*="/spotlight/"]').attr('href');
+        if (spotlightLink) {
+            return spotlightLink.startsWith('http') ? spotlightLink : `https://www.snapchat.com${spotlightLink}`;
+        }
+        
+        return null;
+    } catch (error) {
+        // لو error 3xx مع location header
+        if (error.response?.headers?.location) {
+            return error.response.headers.location;
+        }
+        return null;
+    }
+};
+
+// ===============================
 // YouTube Downloader
 // ===============================
 const downloadYouTube = async (url) => {
@@ -290,16 +339,34 @@ const downloadFacebook = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (يدعم Spotlight + Stories + Public Profiles)
+// Snapchat Downloader (يدعم Short Links t/ + Spotlight + Stories)
 // ===============================
 const downloadSnapchat = async (url) => {
-    const isSpotlight = url.includes('/spotlight/');
-    const isPublicProfile = url.includes('/@');
+    let targetUrl = url;
+    let isShortLink = false;
     
-    // Method 1: snapchatsaver.com API (يدعم Spotlight بشكل خاص)
+    // Check if it's a short link (snapchat.com/t/...)
+    if (url.includes('/t/')) {
+        isShortLink = true;
+        console.log('Resolving Snapchat short link:', url);
+        
+        // Resolve the short link
+        const resolved = await resolveSnapchatShortLink(url);
+        if (resolved) {
+            targetUrl = resolved;
+            console.log('Resolved to:', targetUrl);
+        } else {
+            throw new Error('Failed to resolve Snapchat short link');
+        }
+    }
+    
+    const isSpotlight = targetUrl.includes('/spotlight/');
+    const isPublicProfile = targetUrl.includes('/@');
+    
+    // Method 1: snapchatsaver.com API
     try {
         const { data } = await axios.post('https://snapchatsaver.com/api/download', 
-            new URLSearchParams({ url }), 
+            new URLSearchParams({ url: targetUrl }), 
             {
                 headers: {
                     'User-Agent': getRandomUserAgent(),
@@ -322,10 +389,10 @@ const downloadSnapchat = async (url) => {
         }
     } catch (e) {}
 
-    // Method 2: getindevice.com API (يدعم Spotlight والـ Public Profiles)
+    // Method 2: getindevice.com API
     try {
         const { data } = await axios.post('https://getindevice.com/api/v1/snapchat', 
-            { url }, 
+            { url: targetUrl }, 
             {
                 headers: {
                     'User-Agent': getRandomUserAgent(),
@@ -348,10 +415,10 @@ const downloadSnapchat = async (url) => {
         }
     } catch (e) {}
 
-    // Method 3: استخراج مباشر من صفحة Snapchat (للـ Spotlight)
-    if (isSpotlight) {
+    // Method 3: استخراج مباشر من الصفحة (للـ Spotlight)
+    if (isSpotlight || isShortLink) {
         try {
-            const { data: html } = await axios.get(url, {
+            const { data: html } = await axios.get(targetUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -361,10 +428,9 @@ const downloadSnapchat = async (url) => {
                 timeout: 15000
             });
 
-            // البحث عن JSON-LD أو meta tags
             const $ = cheerio.load(html);
             
-            // Method 3a: JSON-LD data
+            // JSON-LD data
             const jsonLd = $('script[type="application/ld+json"]').html();
             if (jsonLd) {
                 try {
@@ -383,7 +449,7 @@ const downloadSnapchat = async (url) => {
                 } catch (jsonError) {}
             }
 
-            // Method 3b: Meta tags
+            // Meta tags
             const metaVideo = $('meta[property="og:video"]').attr('content') || 
                              $('meta[property="og:video:url"]').attr('content') ||
                              $('meta[property="og:video:secure_url"]').attr('content');
@@ -399,7 +465,7 @@ const downloadSnapchat = async (url) => {
                 };
             }
 
-            // Method 3c: البحث عن روابط الفيديو في الصفحة
+            // البحث عن روابط الفيديو في الصفحة
             const videoMatches = html.match(/(https:\/\/[^"']+\.mp4[^"']*)/i);
             if (videoMatches) {
                 return {
@@ -413,37 +479,35 @@ const downloadSnapchat = async (url) => {
         } catch (e) {}
     }
 
-    // Method 4: snapmate.io API (للـ Stories والـ Public Profiles)
-    if (!isSpotlight || isPublicProfile) {
-        try {
-            const { data } = await axios.post('https://snapmate.io/api/download', 
-                new URLSearchParams({ url }), 
-                {
-                    headers: {
-                        'User-Agent': getRandomUserAgent(),
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Referer': 'https://snapmate.io/'
-                    },
-                    timeout: 15000
-                }
-            );
-
-            if (data?.url || data?.downloadUrl) {
-                return {
-                    success: true,
-                    title: data.title || 'Snapchat Video',
-                    platform: 'Snapchat',
-                    thumbnail: data.thumbnail || null,
-                    formats: [{ quality: 'HD', url: data.url || data.downloadUrl, ext: 'mp4' }],
-                    best: data.url || data.downloadUrl
-                };
+    // Method 4: snapmate.io API
+    try {
+        const { data } = await axios.post('https://snapmate.io/api/download', 
+            new URLSearchParams({ url: targetUrl }), 
+            {
+                headers: {
+                    'User-Agent': getRandomUserAgent(),
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Referer': 'https://snapmate.io/'
+                },
+                timeout: 15000
             }
-        } catch (e) {}
-    }
+        );
+
+        if (data?.url || data?.downloadUrl) {
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                formats: [{ quality: 'HD', url: data.url || data.downloadUrl, ext: 'mp4' }],
+                best: data.url || data.downloadUrl
+            };
+        }
+    } catch (e) {}
 
     // Method 5: yt-dlp كآخر حل
     try {
-        const cmd = `yt-dlp -j --no-warnings --add-header "User-Agent: Mozilla/5.0" "${url}"`;
+        const cmd = `yt-dlp -j --no-warnings --add-header "User-Agent: Mozilla/5.0" "${targetUrl}"`;
         const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
         const info = JSON.parse(stdout);
         
@@ -465,7 +529,7 @@ const downloadSnapchat = async (url) => {
         }
     } catch (error) {}
 
-    throw new Error(`Snapchat download failed - ${isSpotlight ? 'Spotlight not available' : 'all methods exhausted'}`);
+    throw new Error(`Snapchat download failed - ${isShortLink ? 'short link resolve failed' : (isSpotlight ? 'Spotlight not available' : 'all methods exhausted')}`);
 };
 
 // ===============================
