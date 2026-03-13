@@ -407,15 +407,13 @@ const downloadTwitter = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (يدعم SnapMate.io + Short Links + yt-dlp)
+// Snapchat Downloader (SnapMate.io فقط)
 // ===============================
 const downloadSnapchat = async (url) => {
     let targetUrl = url;
-    let isShortLink = false;
     
     // التحقق من short link (snapchat.com/t/...)
     if (url.includes('/t/')) {
-        isShortLink = true;
         console.log('Resolving Snapchat short link:', url);
         
         const resolved = await resolveSnapchatShortLink(url);
@@ -425,7 +423,6 @@ const downloadSnapchat = async (url) => {
         }
     }
     
-    // Method 1: SnapMate.io (الطريقة الأساسية)
     try {
         // الخطوة 1: نجيب الـ token من الصفحة الرئيسية
         const homeRes = await axios.get('https://snapmate.io/', {
@@ -527,34 +524,9 @@ const downloadSnapchat = async (url) => {
         }
         
         throw new Error('No download links from SnapMate');
-    } catch (snapmateError) {
-        console.log('SnapMate failed:', snapmateError.message);
         
-        // Method 2: yt-dlp كـ fallback
-        try {
-            const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
-            const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
-            const info = JSON.parse(stdout);
-            
-            const formats = (info.formats || [])
-                .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
-                .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
-                .slice(0, 5);
-
-            if (formats.length === 0) throw new Error('No video formats found');
-
-            return {
-                success: true,
-                title: info.title || 'Snapchat Video',
-                platform: 'Snapchat',
-                thumbnail: info.thumbnail,
-                uploader: info.uploader,
-                formats,
-                best: formats[0]?.url || info.url
-            };
-        } catch (ytdlpError) {
-            throw new Error(`Snapchat download failed - SnapMate: ${snapmateError.message}, yt-dlp: ${ytdlpError.message}`);
-        }
+    } catch (error) {
+        throw new Error(`Snapchat download failed: ${error.message}`);
     }
 };
 
