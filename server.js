@@ -407,7 +407,7 @@ const downloadTwitter = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (yt-dlp فقط - الأكثر موثوقية)
+// Snapchat Downloader (GetInDevice + SnapMate + yt-dlp)
 // ===============================
 const downloadSnapchat = async (url) => {
     let targetUrl = url;
@@ -422,60 +422,111 @@ const downloadSnapchat = async (url) => {
         }
     }
     
+    // Method 1: GetInDevice API (يدعم story.snapchat.com)
     try {
-        // استخدام yt-dlp مع إعدادات محسنة لـ Snapchat
-        const cmd = `yt-dlp --no-warnings --dump-json --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" --add-header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" --add-header "Accept-Language: en-US,en;q=0.9" "${targetUrl}"`;
+        const formData = new URLSearchParams();
+        formData.append('url', targetUrl);
         
-        const { stdout, stderr } = await execPromise(cmd, { 
-            maxBuffer: 1024 * 1024 * 10, 
-            timeout: 30000 
+        const { data } = await axios.post('https://getindevice.com/wp-json/aio-dl/video-data/', formData, {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://getindevice.com/snap-video-saver/',
+                'Accept': 'application/json, text/plain, */*',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Origin': 'https://getindevice.com'
+            },
+            timeout: 30000
         });
         
-        if (!stdout) {
-            throw new Error('No data returned from yt-dlp');
+        if (data?.url || data?.downloadUrl || data?.videoUrl) {
+            const videoUrl = data.url || data.downloadUrl || data.videoUrl;
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                uploader: data.uploader || null,
+                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
+                best: videoUrl
+            };
         }
+    } catch (error) {
+        console.log('GetInDevice failed:', error.message);
+    }
+    
+    // Method 2: SnapMate API (يدعم جميع روابط Snapchat)
+    try {
+        const formData = new URLSearchParams();
+        formData.append('url', targetUrl);
         
+        const { data } = await axios.post('https://snapmate.io/api/download', formData, {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://snapmate.io/',
+                'Accept': 'application/json, text/plain, */*',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Origin': 'https://snapmate.io'
+            },
+            timeout: 30000
+        });
+        
+        if (data?.url || data?.downloadUrl || data?.videoUrl || data?.link) {
+            const videoUrl = data.url || data.downloadUrl || data.videoUrl || data.link;
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                uploader: data.uploader || data.author || null,
+                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
+                best: videoUrl
+            };
+        }
+    } catch (error) {
+        console.log('SnapMate failed:', error.message);
+    }
+    
+    // Method 3: محاولة استخدام snapsave.app
+    try {
+        const { data } = await axios.get('https://snapsave.app/info', {
+            params: { url: targetUrl },
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': 'https://snapsave.app/'
+            },
+            timeout: 30000
+        });
+        
+        if (data?.url || data?.videoUrl || data?.downloadUrl) {
+            const videoUrl = data.url || data.videoUrl || data.downloadUrl;
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
+                best: videoUrl
+            };
+        }
+    } catch (error) {
+        console.log('SnapSave.app failed:', error.message);
+    }
+    
+    // Method 4: yt-dlp (للروابط المدعومة فقط مثل spotlight)
+    try {
+        const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
+        const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
         const info = JSON.parse(stdout);
         
-        // استخراج جميع الصيغ المتاحة
         const formats = (info.formats || [])
             .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
-            .sort((a, b) => (b.height || 0) - (a.height || 0))
-            .map(f => ({ 
-                quality: f.format_note || f.resolution || `${f.height}p` || 'HD', 
-                url: f.url, 
-                ext: 'mp4',
-                height: f.height,
-                width: f.width
-            }))
+            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
             .slice(0, 5);
 
-        if (formats.length === 0) {
-            // إذا لم يوجد صيغ mp4، نبحث عن أي صيغ فيديو
-            const anyFormats = (info.formats || [])
-                .filter(f => f.url && f.vcodec !== "none")
-                .sort((a, b) => (b.height || 0) - (a.height || 0))
-                .map(f => ({ 
-                    quality: f.format_note || f.resolution || `${f.height}p` || 'HD', 
-                    url: f.url, 
-                    ext: f.ext || 'mp4'
-                }))
-                .slice(0, 5);
-                
-            if (anyFormats.length > 0) {
-                return {
-                    success: true,
-                    title: info.title || 'Snapchat Video',
-                    platform: 'Snapchat',
-                    thumbnail: info.thumbnail,
-                    uploader: info.uploader,
-                    formats: anyFormats,
-                    best: anyFormats[0].url
-                };
-            }
-            
-            throw new Error('No video formats found');
-        }
+        if (formats.length === 0) throw new Error('No video formats found');
 
         return {
             success: true,
@@ -483,15 +534,11 @@ const downloadSnapchat = async (url) => {
             platform: 'Snapchat',
             thumbnail: info.thumbnail,
             uploader: info.uploader,
-            duration: info.duration,
             formats,
-            best: formats[0].url
+            best: formats[0]?.url || info.url
         };
     } catch (error) {
-        console.error('yt-dlp error:', error.message);
-        
-        // إذا فشل yt-dlp، نحاول استخدام الطريقة المباشرة مع التحذير
-        throw new Error(`Snapchat download failed: ${error.message}. Please ensure yt-dlp is updated (run: yt-dlp -U) and the Snapchat URL is public (not private).`);
+        throw new Error(`Snapchat download failed: ${error.message}. Note: Story links (story.snapchat.com) require specific APIs. Please ensure the URL is public.`);
     }
 };
 
