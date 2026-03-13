@@ -45,13 +45,11 @@ const isYouTubeShorts = (url) => /youtube\.com\/shorts\//i.test(url);
 // ===============================
 const resolveSnapchatShortLink = async (shortUrl) => {
     try {
-        // إضافة www. لو مش موجود
         let url = shortUrl;
         if (!url.includes('www.')) {
             url = url.replace('snapchat.com', 'www.snapchat.com');
         }
         
-        // محاولة 1: استخدام HEAD request مع maxRedirects: 0
         try {
             const response = await axios.head(url, {
                 headers: {
@@ -76,7 +74,6 @@ const resolveSnapchatShortLink = async (shortUrl) => {
             }
         }
 
-        // محاولة 2: استخدام GET مع maxRedirects: 0
         try {
             const response = await axios.get(url, {
                 headers: {
@@ -96,7 +93,6 @@ const resolveSnapchatShortLink = async (shortUrl) => {
                 return response.headers.location;
             }
 
-            // البحث عن redirect في الـ HTML
             const $ = cheerio.load(response.data);
             const metaRefresh = $('meta[http-equiv="refresh"]').attr('content');
             if (metaRefresh) {
@@ -104,7 +100,6 @@ const resolveSnapchatShortLink = async (shortUrl) => {
                 if (urlMatch) return urlMatch[1];
             }
             
-            // البحث عن JavaScript redirect
             const scriptRedirect = response.data.match(/window\.location\.href\s*=\s*["']([^"']+)["']/);
             if (scriptRedirect) return scriptRedirect[1];
             
@@ -114,7 +109,6 @@ const resolveSnapchatShortLink = async (shortUrl) => {
             }
         }
 
-        // محاولة 3: استخدام unshorten.me API (مجاني)
         try {
             const { data } = await axios.get(`https://unshorten.me/json/${encodeURIComponent(shortUrl)}`, {
                 timeout: 10000
@@ -413,7 +407,7 @@ const downloadTwitter = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (يدعم Short Links + Spotlight + Stories)
+// Snapchat Downloader (يدعم SnapMate.io + Short Links + yt-dlp)
 // ===============================
 const downloadSnapchat = async (url) => {
     let targetUrl = url;
@@ -424,42 +418,143 @@ const downloadSnapchat = async (url) => {
         isShortLink = true;
         console.log('Resolving Snapchat short link:', url);
         
-        // Resolve the short link
         const resolved = await resolveSnapchatShortLink(url);
         if (resolved) {
             targetUrl = resolved;
             console.log('Resolved to:', targetUrl);
-        } else {
-            // لو مقدرناش نحل الـ short link، نجرب نستخدم yt-dlp مباشرة على الـ original URL
-            console.log('Failed to resolve short link, trying original URL with yt-dlp');
         }
     }
     
-    // الآن نستخدم yt-dlp (أسرع طريقة)
+    // Method 1: SnapMate.io (الطريقة الأساسية)
     try {
-        const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
-        const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
-        const info = JSON.parse(stdout);
+        // الخطوة 1: نجيب الـ token من الصفحة الرئيسية
+        const homeRes = await axios.get('https://snapmate.io/', {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.google.com/'
+            },
+            timeout: 15000
+        });
         
-        // فيديو فقط - استبعاد الصوت
-        const formats = (info.formats || [])
-            .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
-            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
-            .slice(0, 5);
+        const $home = cheerio.load(homeRes.data);
+        const csrfToken = $home('input[name="csrf_token"]').val() || 
+                         $home('meta[name="csrf-token"]').attr('content') ||
+                         homeRes.data.match(/csrf_token\s*=\s*["']([^"']+)["']/i)?.[1];
+        
+        // الخطوة 2: نبعت الطلب مع الرابط
+        const formData = new URLSearchParams();
+        formData.append('url', targetUrl);
+        if (csrfToken) formData.append('csrf_token', csrfToken);
+        
+        const processRes = await axios.post('https://snapmate.io/process', formData, {
+            headers: {
+                'User-Agent': getRandomUserAgent(),
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://snapmate.io/',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Origin': 'https://snapmate.io'
+            },
+            timeout: 30000
+        });
+        
+        // الخطوة 3: نستخرج روابط التحميل من الرد
+        const $result = cheerio.load(processRes.data);
+        
+        // البحث عن روابط التحميل
+        const downloadLinks = [];
+        
+        // البحث عن a tags مع href يحتوي على .mp4 أو download
+        $result('a[href*=".mp4"], a[download], a.btn-download, .download-link').each((i, el) => {
+            const href = $result(el).attr('href');
+            const quality = $result(el).text().match(/(\d+p|HD|4K|1080p|720p)/i)?.[1] || 'HD';
+            if (href && href.includes('.mp4')) {
+                downloadLinks.push({ quality, url: href, ext: 'mp4' });
+            }
+        });
+        
+        // البحث في الـ JSON لو موجود
+        const jsonMatch = processRes.data.match(/window\.__DATA__\s*=\s*({[^;]+});/);
+        if (jsonMatch) {
+            try {
+                const jsonData = JSON.parse(jsonMatch[1]);
+                if (jsonData.video?.url) {
+                    downloadLinks.push({ 
+                        quality: jsonData.video.quality || 'HD', 
+                        url: jsonData.video.url, 
+                        ext: 'mp4' 
+                    });
+                }
+                if (jsonData.formats?.length > 0) {
+                    jsonData.formats.forEach(f => {
+                        if (f.url && f.ext === 'mp4') {
+                            downloadLinks.push({ 
+                                quality: f.quality || 'HD', 
+                                url: f.url, 
+                                ext: 'mp4' 
+                            });
+                        }
+                    });
+                }
+            } catch (e) {}
+        }
+        
+        // البحث عن أي رابط mp4 في الـ HTML
+        if (downloadLinks.length === 0) {
+            const mp4Matches = processRes.data.match(/(https:\/\/[^"']+\.mp4[^"']*)/gi);
+            if (mp4Matches) {
+                mp4Matches.forEach(url => {
+                    downloadLinks.push({ quality: 'HD', url, ext: 'mp4' });
+                });
+            }
+        }
+        
+        if (downloadLinks.length > 0) {
+            // إزالة التكرارات
+            const uniqueLinks = downloadLinks.filter((v, i, a) => 
+                a.findIndex(t => t.url === v.url) === i
+            );
+            
+            return {
+                success: true,
+                title: 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: null,
+                formats: uniqueLinks.slice(0, 5),
+                best: uniqueLinks[0].url
+            };
+        }
+        
+        throw new Error('No download links from SnapMate');
+    } catch (snapmateError) {
+        console.log('SnapMate failed:', snapmateError.message);
+        
+        // Method 2: yt-dlp كـ fallback
+        try {
+            const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
+            const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
+            const info = JSON.parse(stdout);
+            
+            const formats = (info.formats || [])
+                .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
+                .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
+                .slice(0, 5);
 
-        if (formats.length === 0) throw new Error('No video formats found');
+            if (formats.length === 0) throw new Error('No video formats found');
 
-        return {
-            success: true,
-            title: info.title || 'Snapchat Video',
-            platform: 'Snapchat',
-            thumbnail: info.thumbnail,
-            uploader: info.uploader,
-            formats,
-            best: formats[0]?.url || info.url
-        };
-    } catch (error) {
-        throw new Error(`Snapchat download failed - ${isShortLink ? 'short link resolve failed or ' : ''}yt-dlp error`);
+            return {
+                success: true,
+                title: info.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: info.thumbnail,
+                uploader: info.uploader,
+                formats,
+                best: formats[0]?.url || info.url
+            };
+        } catch (ytdlpError) {
+            throw new Error(`Snapchat download failed - SnapMate: ${snapmateError.message}, yt-dlp: ${ytdlpError.message}`);
+        }
     }
 };
 
