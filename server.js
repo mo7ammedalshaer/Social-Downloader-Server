@@ -41,7 +41,7 @@ const extractYouTubeId = (url) => {
 const isYouTubeShorts = (url) => /youtube\.com\/shorts\//i.test(url);
 
 // ===============================
-// Resolve Snapchat Short Links (t/ links)
+// Resolve Snapchat Short Links (t/ links) - مع متابعة جميع الـ redirects
 // ===============================
 const resolveSnapchatShortLink = async (shortUrl) => {
     try {
@@ -50,32 +50,61 @@ const resolveSnapchatShortLink = async (shortUrl) => {
             url = url.replace('snapchat.com', 'www.snapchat.com');
         }
         
-        try {
-            const response = await axios.head(url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1'
-                },
-                maxRedirects: 0,
-                validateStatus: (status) => status >= 200 && status < 400,
-                timeout: 15000
-            });
-            
-            if (response.headers.location) {
-                return response.headers.location;
-            }
-        } catch (headError) {
-            if (headError.response?.headers?.location) {
-                return headError.response.headers.location;
+        // متابعة الـ redirects حتى النهاية
+        const maxRedirects = 5;
+        let currentUrl = url;
+        let redirectCount = 0;
+        
+        while (redirectCount < maxRedirects) {
+            try {
+                const response = await axios.head(currentUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1'
+                    },
+                    maxRedirects: 0,
+                    validateStatus: (status) => status >= 200 && status < 400,
+                    timeout: 15000
+                });
+                
+                // إذا وصلنا لصفحة بدون redirect، نرجع الرابط
+                if (response.status === 200) {
+                    return currentUrl;
+                }
+                
+                if (response.headers.location) {
+                    currentUrl = response.headers.location;
+                    // إذا كان الرابط النهائي هو snapchat.com، نرجعه
+                    if (currentUrl.includes('snapchat.com') && !currentUrl.includes('/t/')) {
+                        return currentUrl;
+                    }
+                    redirectCount++;
+                    continue;
+                }
+                
+                return currentUrl;
+                
+            } catch (headError) {
+                if (headError.response?.headers?.location) {
+                    currentUrl = headError.response.headers.location;
+                    // إذا كان الرابط النهائي هو snapchat.com، نرجعه
+                    if (currentUrl.includes('snapchat.com') && !currentUrl.includes('/t/')) {
+                        return currentUrl;
+                    }
+                    redirectCount++;
+                    continue;
+                }
+                break;
             }
         }
-
+        
+        // محاولة باستخدام GET إذا فشل HEAD
         try {
-            const response = await axios.get(url, {
+            const response = await axios.get(currentUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -84,41 +113,20 @@ const resolveSnapchatShortLink = async (shortUrl) => {
                     'Connection': 'keep-alive',
                     'Upgrade-Insecure-Requests': '1'
                 },
-                maxRedirects: 0,
-                validateStatus: (status) => status >= 200 && status < 400,
+                maxRedirects: 5,
                 timeout: 15000
             });
             
-            if (response.headers.location) {
-                return response.headers.location;
-            }
-
-            const $ = cheerio.load(response.data);
-            const metaRefresh = $('meta[http-equiv="refresh"]').attr('content');
-            if (metaRefresh) {
-                const urlMatch = metaRefresh.match(/url=['"]?([^"']+)['"]?/i);
-                if (urlMatch) return urlMatch[1];
-            }
-            
-            const scriptRedirect = response.data.match(/window\.location\.href\s*=\s*["']([^"']+)["']/);
-            if (scriptRedirect) return scriptRedirect[1];
+            // الرابط النهائي بعد جميع الـ redirects
+            return response.request.res.responseUrl || currentUrl;
             
         } catch (getError) {
-            if (getError.response?.headers?.location) {
-                return getError.response.headers.location;
+            if (getError.request?.res?.responseUrl) {
+                return getError.request.res.responseUrl;
             }
         }
 
-        try {
-            const { data } = await axios.get(`https://unshorten.me/json/${encodeURIComponent(shortUrl)}`, {
-                timeout: 10000
-            });
-            if (data?.resolved_url) {
-                return data.resolved_url;
-            }
-        } catch (e) {}
-
-        return null;
+        return currentUrl;
     } catch (error) {
         console.error('Error resolving short link:', error.message);
         return null;
@@ -407,14 +415,14 @@ const downloadTwitter = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (GetInDevice + SnapMate + yt-dlp)
+// Snapchat Downloader (Resolve Redirect + yt-dlp)
 // ===============================
 const downloadSnapchat = async (url) => {
     let targetUrl = url;
     
-    // حل الروابط القصيرة
-    if (url.includes('/t/')) {
-        console.log('Resolving Snapchat short link:', url);
+    // الخطوة 1: حل الروابط القصيرة أولاً
+    if (url.includes('/t/') || url.includes('story.snapchat.com')) {
+        console.log('Resolving Snapchat redirect:', url);
         const resolved = await resolveSnapchatShortLink(url);
         if (resolved) {
             targetUrl = resolved;
@@ -422,111 +430,33 @@ const downloadSnapchat = async (url) => {
         }
     }
     
-    // Method 1: GetInDevice API (يدعم story.snapchat.com)
+    // الخطوة 2: استخدام yt-dlp على الرابط النهائي
     try {
-        const formData = new URLSearchParams();
-        formData.append('url', targetUrl);
-        
-        const { data } = await axios.post('https://getindevice.com/wp-json/aio-dl/video-data/', formData, {
-            headers: {
-                'User-Agent': getRandomUserAgent(),
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': 'https://getindevice.com/snap-video-saver/',
-                'Accept': 'application/json, text/plain, */*',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Origin': 'https://getindevice.com'
-            },
-            timeout: 30000
+        const cmd = `yt-dlp -v -j --no-warnings "${targetUrl}"`;
+        const { stdout, stderr } = await execPromise(cmd, { 
+            maxBuffer: 1024 * 1024 * 10, 
+            timeout: 30000 
         });
         
-        if (data?.url || data?.downloadUrl || data?.videoUrl) {
-            const videoUrl = data.url || data.downloadUrl || data.videoUrl;
-            return {
-                success: true,
-                title: data.title || 'Snapchat Video',
-                platform: 'Snapchat',
-                thumbnail: data.thumbnail || null,
-                uploader: data.uploader || null,
-                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
-                best: videoUrl
-            };
+        if (!stdout) {
+            throw new Error('No data returned from yt-dlp');
         }
-    } catch (error) {
-        console.log('GetInDevice failed:', error.message);
-    }
-    
-    // Method 2: SnapMate API (يدعم جميع روابط Snapchat)
-    try {
-        const formData = new URLSearchParams();
-        formData.append('url', targetUrl);
         
-        const { data } = await axios.post('https://snapmate.io/api/download', formData, {
-            headers: {
-                'User-Agent': getRandomUserAgent(),
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': 'https://snapmate.io/',
-                'Accept': 'application/json, text/plain, */*',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Origin': 'https://snapmate.io'
-            },
-            timeout: 30000
-        });
-        
-        if (data?.url || data?.downloadUrl || data?.videoUrl || data?.link) {
-            const videoUrl = data.url || data.downloadUrl || data.videoUrl || data.link;
-            return {
-                success: true,
-                title: data.title || 'Snapchat Video',
-                platform: 'Snapchat',
-                thumbnail: data.thumbnail || null,
-                uploader: data.uploader || data.author || null,
-                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
-                best: videoUrl
-            };
-        }
-    } catch (error) {
-        console.log('SnapMate failed:', error.message);
-    }
-    
-    // Method 3: محاولة استخدام snapsave.app
-    try {
-        const { data } = await axios.get('https://snapsave.app/info', {
-            params: { url: targetUrl },
-            headers: {
-                'User-Agent': getRandomUserAgent(),
-                'Accept': 'application/json, text/plain, */*',
-                'Referer': 'https://snapsave.app/'
-            },
-            timeout: 30000
-        });
-        
-        if (data?.url || data?.videoUrl || data?.downloadUrl) {
-            const videoUrl = data.url || data.videoUrl || data.downloadUrl;
-            return {
-                success: true,
-                title: data.title || 'Snapchat Video',
-                platform: 'Snapchat',
-                thumbnail: data.thumbnail || null,
-                formats: [{ quality: data.quality || 'HD', url: videoUrl, ext: 'mp4' }],
-                best: videoUrl
-            };
-        }
-    } catch (error) {
-        console.log('SnapSave.app failed:', error.message);
-    }
-    
-    // Method 4: yt-dlp (للروابط المدعومة فقط مثل spotlight)
-    try {
-        const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
-        const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
         const info = JSON.parse(stdout);
         
         const formats = (info.formats || [])
             .filter(f => f.url && f.vcodec !== "none" && f.ext === 'mp4')
-            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: 'mp4' }))
+            .sort((a, b) => (b.height || 0) - (a.height || 0))
+            .map(f => ({ 
+                quality: f.format_note || f.resolution || `${f.height}p` || 'HD', 
+                url: f.url, 
+                ext: 'mp4'
+            }))
             .slice(0, 5);
 
-        if (formats.length === 0) throw new Error('No video formats found');
+        if (formats.length === 0) {
+            throw new Error('No video formats found');
+        }
 
         return {
             success: true,
@@ -534,11 +464,43 @@ const downloadSnapchat = async (url) => {
             platform: 'Snapchat',
             thumbnail: info.thumbnail,
             uploader: info.uploader,
+            duration: info.duration,
             formats,
-            best: formats[0]?.url || info.url
+            best: formats[0].url
         };
     } catch (error) {
-        throw new Error(`Snapchat download failed: ${error.message}. Note: Story links (story.snapchat.com) require specific APIs. Please ensure the URL is public.`);
+        console.error('yt-dlp error:', error.message);
+        
+        // إذا فشل yt-dlp، نحاول استخدام GetInDevice API
+        try {
+            const formData = new URLSearchParams();
+            formData.append('url', targetUrl);
+            
+            const { data } = await axios.post('https://getindevice.com/wp-json/aio-dl/video-data/', formData, {
+                headers: {
+                    'User-Agent': getRandomUserAgent(),
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Referer': 'https://getindevice.com/snap-video-saver/',
+                    'Accept': 'application/json, text/plain, */*'
+                },
+                timeout: 30000
+            });
+            
+            if (data?.url) {
+                return {
+                    success: true,
+                    title: data.title || 'Snapchat Video',
+                    platform: 'Snapchat',
+                    thumbnail: data.thumbnail || null,
+                    formats: [{ quality: data.quality || 'HD', url: data.url, ext: 'mp4' }],
+                    best: data.url
+                };
+            }
+        } catch (apiError) {
+            console.log('API fallback failed:', apiError.message);
+        }
+        
+        throw new Error(`Snapchat download failed: ${error.message}. URL: ${targetUrl}`);
     }
 };
 
@@ -555,6 +517,7 @@ app.post("/api/download", async (req, res) => {
         let result;
         switch (platform) {
             case 'tiktok': result = await downloadTikTok(url); break;
+            case 'instagram': result = await downloadInstagram(url); break;
             case 'instagram': result = await downloadInstagram(url); break;
             case 'youtube': result = await downloadYouTube(url); break;
             case 'twitter': result = await downloadTwitter(url); break;
