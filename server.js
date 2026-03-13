@@ -39,7 +39,7 @@ const extractYouTubeId = (url) => {
 };
 
 // ===============================
-// YouTube Downloader (يدعم Shorts)
+// YouTube Downloader
 // ===============================
 const downloadYouTube = async (url) => {
     const videoId = extractYouTubeId(url);
@@ -115,7 +115,7 @@ const downloadYouTube = async (url) => {
 };
 
 // ===============================
-// TikTok Downloader (بدون علامة مائية)
+// TikTok Downloader
 // ===============================
 const downloadTikTok = async (url) => {
     try {
@@ -226,7 +226,7 @@ const downloadInstagram = async (url) => {
         try {
             const { data } = await axios.get('https://worker.savefrom.net/savefrom.php', {
                 params: { url },
-                headers: { 'User-Agent': getRandomUserAgent(), 'Referer': 'https://savefrom.net/' },
+                headers: { 'User-Agent': getRandomUserAgent(), 'Referer:': 'https://savefrom.net/' },
                 timeout: 15000
             });
 
@@ -290,9 +290,62 @@ const downloadFacebook = async (url) => {
 };
 
 // ===============================
-// Snapchat Downloader (بدون علامة مائية - سريع)
+// Snapchat Downloader (متعدد الطرق)
 // ===============================
 const downloadSnapchat = async (url) => {
+    // Method 1: SnapMate API
+    try {
+        const { data } = await axios.post('https://snapmate.io/api/download', 
+            new URLSearchParams({ url }), 
+            {
+                headers: {
+                    'User-Agent': getRandomUserAgent(),
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Referer': 'https://snapmate.io/'
+                },
+                timeout: 15000
+            }
+        );
+
+        if (data?.url || data?.downloadUrl) {
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                formats: [{ quality: 'HD', url: data.url || data.downloadUrl, ext: 'mp4' }],
+                best: data.url || data.downloadUrl
+            };
+        }
+    } catch (e) {}
+
+    // Method 2: SocialMediaVideoDownloader
+    try {
+        const { data } = await axios.post('https://socialmediavideodownloader.com/api/v1/snapchat', 
+            { url }, 
+            {
+                headers: {
+                    'User-Agent': getRandomUserAgent(),
+                    'Content-Type': 'application/json',
+                    'Referer': 'https://socialmediavideodownloader.com/'
+                },
+                timeout: 15000
+            }
+        );
+
+        if (data?.url || data?.videoUrl) {
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                formats: [{ quality: 'HD', url: data.url || data.videoUrl, ext: 'mp4' }],
+                best: data.url || data.videoUrl
+            };
+        }
+    } catch (e) {}
+
+    // Method 3: Expertsphp (الطريقة القديمة)
     try {
         const { data } = await axios.get('https://www.expertsphp.com/download', {
             params: { url },
@@ -313,10 +366,59 @@ const downloadSnapchat = async (url) => {
                 best: videoUrl
             };
         }
-        throw new Error('No video found');
-    } catch (e) {
-        throw new Error('Snapchat download failed');
-    }
+    } catch (e) {}
+
+    // Method 4: Snapsaver.cc
+    try {
+        const { data } = await axios.post('https://snapsaver.cc/api/download', 
+            new URLSearchParams({ url }), 
+            {
+                headers: {
+                    'User-Agent': getRandomUserAgent(),
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Referer': 'https://snapsaver.cc/'
+                },
+                timeout: 15000
+            }
+        );
+
+        if (data?.url) {
+            return {
+                success: true,
+                title: data.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: data.thumbnail || null,
+                formats: [{ quality: 'HD', url: data.url, ext: 'mp4' }],
+                best: data.url
+            };
+        }
+    } catch (e) {}
+
+    // Method 5: yt-dlp مع تحسينات للسناب شات
+    try {
+        const cmd = `yt-dlp -j --no-warnings --add-header "User-Agent: Mozilla/5.0" --add-header "Accept: */*" "${url}"`;
+        const { stdout } = await execPromise(cmd, { maxBuffer: 1024 * 1024 * 5, timeout: 15000 });
+        const info = JSON.parse(stdout);
+        
+        const formats = (info.formats || [])
+            .filter(f => f.url && f.vcodec !== "none")
+            .map(f => ({ quality: f.format_note || 'HD', url: f.url, ext: f.ext || 'mp4' }))
+            .slice(0, 5);
+
+        if (formats.length > 0) {
+            return {
+                success: true,
+                title: info.title || 'Snapchat Video',
+                platform: 'Snapchat',
+                thumbnail: info.thumbnail,
+                uploader: info.uploader,
+                formats,
+                best: formats[0]?.url || info.url
+            };
+        }
+    } catch (error) {}
+
+    throw new Error('Snapchat download failed - all methods exhausted');
 };
 
 // ===============================
